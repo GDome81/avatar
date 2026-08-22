@@ -238,14 +238,32 @@ function setMode(m) {
   requestAnimationFrame(misuraBarra);
 }
 
+/* Coda di foto in attesa. Selezionando piu' file (o scattando piu'
+   volte) si prepara una serie senza tornare ogni volta alla galleria:
+   dopo ogni "＋ Serie" la foto successiva si carica da sola. */
+let coda = [];
+
 [filePick, fileShot].forEach((input) => {
   input.addEventListener('change', async (ev) => {
-    const file = ev.target.files && ev.target.files[0];
+    const files = [...(ev.target.files || [])];
     ev.target.value = '';
-    if (!file) return;
-    await loadPhoto(file);
+    if (!files.length) return;
+    coda = coda.concat(files.slice(1));
+    await loadPhoto(files[0]);
+    syncSerie();
+    if (files.length > 1) {
+      showToast(`${files.length} foto in coda: dopo ogni “＋ Serie” passo alla prossima`, 4600);
+    }
   });
 });
+
+async function prossimaDallaCoda() {
+  if (!coda.length) return false;
+  const f = coda.shift();
+  await loadPhoto(f);
+  syncSerie();
+  return true;
+}
 
 async function loadPhoto(file) {
   showToast('Carico la foto…', 1600);
@@ -257,8 +275,12 @@ async function loadPhoto(file) {
   }
   if (!src) return showToast('Non riesco a leggere questa immagine. Se è un HEIC, riprova salvandola come JPEG.', 4200);
 
+  const w0 = src.width || src.naturalWidth, h0 = src.height || src.naturalHeight;
+  // fra scatti della stessa fotocamera l'inquadratura si conserva: e'
+  // quello che serve quando si prepara una serie di pose
+  const stessaMisura = photo && photo.w === w0 && photo.h === h0 && crop.rect;
   if (photo && photo.source && photo.source.close) photo.source.close();
-  photo = { source: src, w: src.width || src.naturalWidth, h: src.height || src.naturalHeight };
+  photo = { source: src, w: w0, h: h0 };
 
   showStage();
   cancelAnimationFrame(raf);
@@ -268,7 +290,7 @@ async function loadPhoto(file) {
   analisi = null;
   renderer.setFace(null);
   renderer.setMask(null);
-  resetCrop();
+  if (!stessaMisura) resetCrop();
   crop.on = true; syncCrop();
   drawPhoto();
   showToast(`Foto ${photo.w}×${photo.h}. Sposta il riquadro su una sola persona.`, 4600);
@@ -379,11 +401,11 @@ function resetCrop() {
   clampCrop();
 }
 
+/* Solo limiti di dimensione e di bordo: le proporzioni sono libere. */
 function clampCrop() {
   const r = crop.rect; if (!r || !photo) return;
-  const maxW = Math.min(photo.w, photo.h * CROP_RATIO);
-  r.w = Math.max(maxW * 0.18, Math.min(maxW, r.w));
-  r.h = r.w / CROP_RATIO;
+  r.w = Math.max(photo.w * 0.05, Math.min(photo.w, r.w));
+  r.h = Math.max(photo.h * 0.05, Math.min(photo.h, r.h));
   r.x = Math.max(0, Math.min(photo.w - r.w, r.x));
   r.y = Math.max(0, Math.min(photo.h - r.h, r.y));
 }
@@ -430,11 +452,14 @@ function drawOverlay() {
   g.lineWidth = 2;
   g.strokeRect(rx, ry, rw, rh);
 
-  // zona della testa e linea degli occhi
+  /* Le guide si disegnano solo se il riquadro e' abbastanza grande:
+     su un riquadro piccolo diventano un groviglio illeggibile. */
+  const grande = Math.min(rw, rh) > 110;
+  if (grande) {
   g.setLineDash([6, 6]);
   g.strokeStyle = 'rgba(255,255,255,.75)';
   g.lineWidth = 1.5;
-  const headH = rh * 0.60, headW = headH * 0.72;
+  const headH = rh * 0.60, headW = Math.min(headH * 0.72, rw * 0.78);
   g.beginPath();
   g.ellipse(rx + rw / 2, ry + rh * 0.08 + headH / 2, headW / 2, headH / 2, 0, 0, Math.PI * 2);
   g.stroke();
@@ -446,11 +471,12 @@ function drawOverlay() {
 
   // maniglie: grandi, perche' si prendono col dito
   const attiva = gesto && gesto.tipo === 'maniglia' ? gesto.ang : null;
+  const raggio = Math.max(6, Math.min(12, Math.min(rw, rh) * 0.22));
   const punti = { tl: [rx, ry], tr: [rx + rw, ry], bl: [rx, ry + rh], br: [rx + rw, ry + rh] };
   for (const k in punti) {
     const [x, y] = punti[k];
     g.beginPath();
-    g.arc(x, y, attiva === k ? 15 : 12, 0, Math.PI * 2);
+    g.arc(x, y, attiva === k ? raggio + 3 : raggio, 0, Math.PI * 2);
     g.fillStyle = attiva === k ? '#9ef7c5' : '#ffffff';
     g.fill();
     g.strokeStyle = 'rgba(0,0,0,.35)';
@@ -462,6 +488,7 @@ function drawOverlay() {
   g.font = '600 12px -apple-system, system-ui, sans-serif';
   g.textAlign = 'center';
   g.fillText('occhi qui', rx + rw / 2, ry + rh * 0.31);
+  }
 }
 
 /* ---- gesti sul riquadro ----
@@ -479,6 +506,16 @@ function drawOverlay() {
 const pointers = new Map();
 const RAGGIO_MANIGLIA = 34;      // px sullo schermo: un dito non e' preciso
 let gesto = null;
+
+/* Il raggio di presa va limitato a una frazione del riquadro. Con un
+   raggio fisso, su un riquadro piccolo le quattro zone d'angolo
+   coprivano tutta l'area: il dito appoggiato al centro afferrava
+   sempre un angolo e il riquadro non si spostava mai. */
+function raggioPresa() {
+  const { s } = scalaSchermo();
+  const latoMinore = Math.min(crop.rect.w, crop.rect.h) * s;
+  return Math.max(14, Math.min(RAGGIO_MANIGLIA, latoMinore * 0.28));
+}
 
 function scalaSchermo() {
   const c = contentRect();
@@ -499,7 +536,7 @@ function maniglia(cx, cy) {
     bl: schermoDaSorgente(r.x, r.y + r.h),
     br: schermoDaSorgente(r.x + r.w, r.y + r.h),
   };
-  let vinta = null, minima = RAGGIO_MANIGLIA;
+  let vinta = null, minima = raggioPresa();
   for (const k in ang) {
     const d = Math.hypot(cx - ang[k].x, cy - ang[k].y);
     if (d < minima) { minima = d; vinta = k; }
@@ -540,15 +577,19 @@ overlay.addEventListener('pointermove', (ev) => {
   if (gesto.tipo === 'pizzico') {
     const d = pinchDistance();
     if (d > 0 && gesto.d0 > 0) {
+      const k = gesto.d0 / d;
       const cx = r0.x + r0.w / 2, cy = r0.y + r0.h / 2;
-      crop.rect.w = r0.w * (gesto.d0 / d);
+      crop.rect.w = r0.w * k;
+      crop.rect.h = r0.h * k;        // scala la forma corrente, non la impone
       clampCrop();
       crop.rect.x = cx - crop.rect.w / 2;
       crop.rect.y = cy - crop.rect.h / 2;
       clampCrop();
     }
   } else if (gesto.tipo === 'maniglia') {
-    // l'angolo opposto resta fermo
+    /* Ogni angolo e' libero: muove il proprio vertice nelle due
+       direzioni, l'opposto resta fermo. Il riquadro non ha piu'
+       proporzioni fisse. */
     const fisso = {
       tl: { x: r0.x + r0.w, y: r0.y + r0.h },
       tr: { x: r0.x,        y: r0.y + r0.h },
@@ -556,25 +597,16 @@ overlay.addEventListener('pointermove', (ev) => {
       br: { x: r0.x,        y: r0.y },
     }[gesto.ang];
     const { c } = scalaSchermo();
-    const px = (ev.clientX - c.x) / s, py = (ev.clientY - c.y) / s;
-    const versoSinistra = gesto.ang === 'tl' || gesto.ang === 'bl';
-    const versoAlto     = gesto.ang === 'tl' || gesto.ang === 'tr';
+    const px = Math.max(0, Math.min(photo.w, (ev.clientX - c.x) / s));
+    const py = Math.max(0, Math.min(photo.h, (ev.clientY - c.y) / s));
+    const minW = photo.w * 0.05, minH = photo.h * 0.05;
 
-    // la larghezza segue la distanza maggiore fra le due, cosi' il
-    // riquadro non si incolla a un lato
-    let w = Math.max(Math.abs(px - fisso.x), Math.abs(py - fisso.y) * CROP_RATIO);
-
-    /* Il limite si applica alla DIMENSIONE, non alla posizione: se si
-       vincolasse la posizione, arrivati al bordo dell'immagine tutto il
-       riquadro scatterebbe di lato invece di fermarsi a crescere. */
-    const maxOrizz = versoSinistra ? fisso.x : photo.w - fisso.x;
-    const maxVert  = versoAlto ? fisso.y : photo.h - fisso.y;
-    w = Math.min(w, maxOrizz, maxVert * CROP_RATIO);
-
+    const w = Math.max(minW, Math.abs(px - fisso.x));
+    const h = Math.max(minH, Math.abs(py - fisso.y));
     crop.rect.w = w;
-    clampCrop();
-    crop.rect.x = versoSinistra ? fisso.x - crop.rect.w : fisso.x;
-    crop.rect.y = versoAlto ? fisso.y - crop.rect.h : fisso.y;
+    crop.rect.h = h;
+    crop.rect.x = (px < fisso.x) ? fisso.x - w : fisso.x;
+    crop.rect.y = (py < fisso.y) ? fisso.y - h : fisso.y;
     clampCrop();
   } else {
     crop.rect.x = r0.x + (ev.clientX - gesto.x0) / s;
@@ -692,9 +724,10 @@ async function exportOne(effectId, source, w, h, flip, volto, maschera, set) {
   // PNG fino a 2048 px (nessun artefatto sui tratti fini); oltre, JPEG,
   // perche' un PNG da 12 Mpx supera i 40 MB e su iOS non si codifica.
   const type = long <= 2048 ? 'image/png' : 'image/jpeg';
-  const size = `${job.canvas.width}×${job.canvas.height}`;
+  const ow = job.canvas.width, oh = job.canvas.height;
+  const size = `${ow}×${oh}`;
   const blob = await toBlob(job.canvas, type, 0.92);
-  job.release();
+  job.release();          // azzera il canvas: le misure si leggono prima
   if (!blob) return null;
   const meta = EFFECTS.find((e) => e.id === effectId) || { name: effectId };
   const kind = effectId === 'ritratto' ? 'identita' : 'stile';
@@ -778,10 +811,13 @@ let ultimaTavola = false;
 function syncSerie() {
   $('#serieLabel').textContent = `${serie.length}/${SERIE_MAX}`;
   $('#btnSerie').setAttribute('aria-pressed', String(serie.length > 0));
-  $('#serieRow').classList.toggle('hidden', serie.length === 0);
+  $('#serieRow').classList.toggle('hidden', serie.length === 0 && coda.length === 0);
+  $('#btnComponi').classList.toggle('hidden', serie.length === 0);
+  $('#btnSvuota').classList.toggle('hidden', serie.length === 0 && coda.length === 0);
+  const inAttesa = coda.length ? ` · ${coda.length} in attesa` : '';
   $('#seriePros').textContent = serie.length < SERIE_MAX
-    ? `Prossima: ${SERIE_POSE[serie.length]}`
-    : 'Serie completa';
+    ? `Prossima: ${SERIE_POSE[serie.length]}${inAttesa}`
+    : `Serie completa${inAttesa}`;
   requestAnimationFrame(misuraBarra);
 }
 
@@ -801,19 +837,27 @@ $('#btnSerie').addEventListener('click', async () => {
   if (!r) return showToast('Non riesco a preparare questo pannello', 3200);
 
   serieSet = set;
-  serie.push({ blob: r.blob, posa: SERIE_POSE[serie.length], size: r.size });
+  serie.push({ blob: r.blob, posa: SERIE_POSE[serie.length], size: r.size, w: r.w, h: r.h });
   syncSerie();
-  if (serie.length === 1 && !set.useMask) {
+
+  if (await prossimaDallaCoda()) {
+    showToast(`Pannello ${serie.length} aggiunto. Ecco la foto successiva`, 3400);
+  } else if (serie.length === 1 && !set.useMask) {
     showToast('Pannello 1 aggiunto. Per una tavola coerente conviene il fondo neutro', 4600);
+  } else if (serie.length < SERIE_MAX) {
+    showToast(`Pannello ${serie.length} aggiunto. Aggiungi altre foto o scatta`, 3800);
   } else {
-    showToast(`Pannello ${serie.length} aggiunto. Carica la prossima foto con 🖼️`, 4000);
+    showToast('Cinque pose: puoi comporre la tavola', 3400);
   }
 });
 
 $('#btnSvuota').addEventListener('click', () => {
-  serie = []; serieSet = null; syncSerie();
+  serie = []; serieSet = null; coda = []; syncSerie();
   showToast('Serie svuotata', 2000);
 });
+
+$('#btnAltraFoto').addEventListener('click', () => filePick.click());
+$('#btnAltroScatto').addEventListener('click', () => fileShot.click());
 
 $('#btnComponi').addEventListener('click', () => componiSerie());
 
@@ -825,11 +869,17 @@ async function componiSerie() {
   const cols = n <= 2 ? n : (n === 4 ? 2 : 3);
   const rows = Math.ceil(n / cols);
   const LIM = 2048, g = 18;
+
+  // i ritagli hanno forme libere: la cella prende la forma media, e i
+  // pannelli che non la riempiono restano centrati sul fondo
+  const forme = serie.map((sp) => (sp.w && sp.h) ? sp.w / sp.h : CROP_RATIO);
+  const forma = Math.max(0.4, Math.min(2.2, forme.reduce((a, b) => a + b, 0) / forme.length));
+
   let cw = Math.floor((LIM - g * (cols + 1)) / cols);
-  let ch = Math.round(cw / CROP_RATIO);
+  let ch = Math.round(cw / forma);
   if (rows * ch + g * (rows + 1) > LIM) {
     ch = Math.floor((LIM - g * (rows + 1)) / rows);
-    cw = Math.round(ch * CROP_RATIO);
+    cw = Math.round(ch * forma);
   }
   const W = cols * cw + g * (cols + 1), H = rows * ch + g * (rows + 1);
   if (!canvasFits(W, H)) return showToast('Tavola troppo grande per questo telefono', 3600);

@@ -79,10 +79,11 @@ fondo neutro, caricatura, ritaglio, risoluzione — vive nel pannello **⚙ Rego
 che si apre a metà schermo lasciando l'immagine visibile sopra di sé, così le
 regolazioni si fanno guardando il risultato.
 
-- **Riquadro di ritaglio** — trascina il riquadro per spostarlo, trascina un
-  angolo per ridimensionarlo (le proporzioni restano 4:5), oppure pizzica con due
-  dita. Al bordo dell'immagine il riquadro si ferma a crescere invece di scattare
-  di lato
+- **Riquadro di ritaglio** — il dito **dentro** il riquadro lo sposta, un
+  **angolo** lo ridimensiona liberamente (ogni angolo muove il proprio vertice,
+  nessuna proporzione imposta), due dita lo scalano. La zona di presa degli angoli
+  si restringe con il riquadro: con un raggio fisso, su un riquadro piccolo le
+  quattro zone coprivano tutta l'area e il dito al centro non spostava mai nulla
 - **Fondo neutro** — attivo per default: lo sfondo viene sostituito da un fondo
   piatto in **tutti** gli effetti, ognuno col proprio (grigio per i disegni a
   colori, carta per matita e acquerello, scuro per il neon)
@@ -94,10 +95,14 @@ regolazioni si fanno guardando il risultato.
 Un personaggio regge le tavole successive se il modello ne vede la struttura da
 più angoli, non una sola proiezione. Quindi:
 
-1. inquadra la prima posa e tocca **＋ Serie**
-2. carica la foto successiva con 🖼️ e ripeti — l'app suggerisce la posa
-   (di fronte, tre quarti destro, tre quarti sinistro, di profilo, sorriso)
-3. tocca **Componi la tavola**
+1. scegli **più foto in una volta** (o scattane una), inquadra e tocca **＋ Serie**
+2. la foto successiva della coda si carica da sola; l'app suggerisce la posa
+   (di fronte, tre quarti destro, tre quarti sinistro, di profilo, sorriso).
+   Con *Altre foto* e *Scatta* puoi aggiungerne quando vuoi
+3. tocca **Componi**
+
+Fra scatti della stessa fotocamera il ritaglio si conserva: quando le foto hanno
+la stessa misura non si riparte da zero ogni volta.
 
 Escono **due cose**: la tavola unica, per i modelli che accettano un solo
 riferimento (Midjourney), e i **pannelli separati**, per quelli che ne accettano

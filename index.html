@@ -63,7 +63,9 @@
   <div class="bottombar">
     <div id="serieRow" class="serie-row hidden">
       <span id="seriePros" class="serie-hint"></span>
-      <button id="btnComponi" class="pill">Componi la tavola</button>
+      <button id="btnAltraFoto" class="pill ghost">🖼️ Altre foto</button>
+      <button id="btnAltroScatto" class="pill ghost">📷 Scatta</button>
+      <button id="btnComponi" class="pill">Componi</button>
       <button id="btnSvuota" class="pill ghost">Svuota</button>
     </div>
 
@@ -131,7 +133,7 @@
     <h3 class="sez">Inquadratura</h3>
     <div class="row">
       <span class="lab">Riquadro di ritaglio
-        <span class="hint">Trascinalo sul viso, pizzica per stringere. Una sola persona per volta.</span>
+        <span class="hint">Il dito dentro il riquadro lo sposta, un angolo lo ridimensiona liberamente, due dita lo scalano. Una sola persona per volta.</span>
       </span>
       <button id="btnCrop" class="switch" type="button" aria-pressed="false" aria-label="Riquadro di ritaglio"></button>
     </div>
@@ -189,7 +191,8 @@
   </div>
 </section>
 
-<input id="filePick" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+<!-- multiple: per la serie si scelgono piu' foto in una volta -->
+<input id="filePick" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
 <input id="fileShot" type="file" accept="image/jpeg,image/png" capture="environment" hidden>
 
 <script src="engine.js"></script>
