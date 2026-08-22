@@ -280,16 +280,11 @@ function drawPhoto() {
   const w = Math.max(2, Math.round(photo.w * k)), h = Math.max(2, Math.round(photo.h * k));
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   renderer.load(photo.source, photo.w, photo.h, { outSide: Math.max(w, h) });
-  renderer.draw(effect, Object.assign({ width: w, height: h, amount, clean, time: 3, flip: false }, extra()));
+  renderer.draw(effect, { width: w, height: h, amount, clean, time: 3, flip: false, car: carOn ? car : 0, useMask: bgOn, bg: [0.88, 0.88, 0.90] });
   drawOverlay();
 }
 
 function redrawIfPhoto() { if (mode === 'foto') drawPhoto(); }
-
-/* Opzioni che valgono sia per l'anteprima sia per l'esportazione. */
-function extra() {
-  return { useMask: bgOn, bg: [0.88, 0.88, 0.90], car: carOn ? car : 0 };
-}
 
 /* ---------------------------------------------------------
    Rilevamento del volto e dello sfondo
@@ -553,6 +548,13 @@ function drawCrop(src, rect, w, h) {
   return cv;
 }
 
+/* Le impostazioni di resa vengono passate esplicitamente invece di
+   essere lette dai comandi: la serie deve poter usare quelle bloccate
+   al primo scatto anche se poi l'utente cambia effetto. */
+function impostazioni() {
+  return { effect, amount, clean, car: carOn ? car : 0, useMask: bgOn, bg: [0.88, 0.88, 0.90] };
+}
+
 function renderFull(source, w, h, opts, volto, maschera) {
   const cap = renderer ? renderer.maxTexture : 4096;
   let ow = w, oh = h;
@@ -566,9 +568,10 @@ function renderFull(source, w, h, opts, volto, maschera) {
   r.load(source, w, h, { outSide: Math.max(ow, oh) });
   r.setFace(volto || null);
   r.setMask(maschera || null);
-  r.draw(opts.effect, Object.assign({
+  r.draw(opts.effect, {
     width: ow, height: oh, amount: opts.amount, clean: opts.clean, time: 3, flip: opts.flip,
-  }, extra()));
+    car: opts.car || 0, useMask: !!opts.useMask, bg: opts.bg || [0.88, 0.88, 0.90],
+  });
   if (r.uploadError) showToast('Questo telefono non regge questa risoluzione: prova 1024 px', 4200);
   // il contesto va liberato SOLO dopo la lettura del canvas: perderlo
   // svuota il drawing buffer e il file uscirebbe vuoto
@@ -579,8 +582,9 @@ function toBlob(cv, type, q) {
   return new Promise((res) => cv.toBlob((b) => res(b), type, q));
 }
 
-async function exportOne(effectId, source, w, h, flip, volto, maschera) {
-  const job = renderFull(source, w, h, { effect: effectId, amount, clean, flip }, volto, maschera);
+async function exportOne(effectId, source, w, h, flip, volto, maschera, set) {
+  const cfg = Object.assign({}, set || impostazioni(), { effect: effectId, flip });
+  const job = renderFull(source, w, h, cfg, volto, maschera);
   const long = Math.max(job.canvas.width, job.canvas.height);
   // PNG fino a 2048 px (nessun artefatto sui tratti fini); oltre, JPEG,
   // perche' un PNG da 12 Mpx supera i 40 MB e su iOS non si codifica.
@@ -602,44 +606,172 @@ async function exportOne(effectId, source, w, h, flip, volto, maschera) {
   };
 }
 
+/* Ritaglio, riduzione e analisi: il pezzo comune fra lo scatto singolo
+   e l'aggiunta alla serie. L'analisi va fatta sul RITAGLIO, perche' i
+   punti del volto e la maschera sono in coordinate normalizzate
+   sull'inquadratura, non sulla foto intera. */
+async function sorgentePronta(set) {
+  let src, flip = false;
+  if (mode === 'foto') src = photo;
+  else { src = await cameraStill(); flip = facing === 'user'; }
+  if (!src) return null;
+
+  const rect = (mode === 'foto' && crop.on && crop.rect)
+    ? crop.rect : { x: 0, y: 0, w: src.w, h: src.h };
+  const fitted = cropAndFit(src, rect, targetLong());
+
+  let volto = null, maschera = null;
+  if ((set.useMask || set.car > 0) && Face.stato === 'pronto') {
+    const a = await Face.analizza(fitted, fitted.width, fitted.height);
+    volto = a.volto; maschera = a.maschera;
+    if (!volto && set.car > 0) showToast('Nel ritaglio non trovo il volto: esporto senza caricatura', 3600);
+  }
+  return { fitted, volto, maschera, flip };
+}
+
 async function shoot() {
   const flash = $('#flash');
   flash.classList.add('on');
   requestAnimationFrame(() => flash.classList.remove('on'));
 
-  let src, flip = false;
-  if (mode === 'foto') src = photo;
-  else { src = await cameraStill(); flip = facing === 'user'; }
-  if (!src) return;
-
-  const rect = (mode === 'foto' && crop.on && crop.rect)
-    ? crop.rect : { x: 0, y: 0, w: src.w, h: src.h };
-
+  const set = impostazioni();
   showToast('Elaboro a piena risoluzione…', 2500);
-  const fitted = cropAndFit(src, rect, targetLong());
+  const src = await sorgentePronta(set);
+  if (!src) return;
 
   const list = (mode === 'foto' && pairOn)
     ? ['ritratto', effect === 'ritratto' ? lastStyle : effect]
     : [effect];
 
-  // Il ritaglio va analizzato a parte: i punti del volto e la maschera
-  // sono in coordinate normalizzate sull'inquadratura.
-  let volto = null, maschera = null;
-  if ((bgOn || carOn) && Face.stato === 'pronto') {
-    const a = await Face.analizza(fitted, fitted.width, fitted.height);
-    volto = a.volto; maschera = a.maschera;
-    if (!volto && carOn) showToast('Nel ritaglio non trovo il volto: esporto senza caricatura', 3600);
-  }
-
   const out = [];
   for (const id of list) {
-    const r = await exportOne(id, fitted, fitted.width, fitted.height, flip, volto, maschera);
+    const r = await exportOne(id, src.fitted, src.fitted.width, src.fitted.height,
+                             src.flip, src.volto, src.maschera, set);
     if (r) out.push(r);
   }
-  fitted.width = fitted.height = 0;
+  src.fitted.width = src.fitted.height = 0;
   if (!out.length) return showToast('Esportazione non riuscita: prova una risoluzione più bassa', 4000);
+  ultimaTavola = false;
   showResults(out);
 }
+
+/* ---------------------------------------------------------
+   Serie: fino a cinque scatti in una sola tavola
+
+   Un personaggio regge le tavole successive se il modello ne vede la
+   struttura da piu' angoli, non una sola proiezione. Le pose vengono
+   rese TUTTE con le impostazioni del primo scatto: se cambiassero
+   effetto o intensita' da un pannello all'altro, il modello leggerebbe
+   le differenze di stile come differenze del personaggio.
+   --------------------------------------------------------- */
+
+const SERIE_MAX = 5;
+const SERIE_POSE = ['di fronte, sguardo in camera', 'tre quarti verso destra',
+                    'tre quarti verso sinistra', 'di profilo', 'espressione diversa (sorriso)'];
+let serie = [];
+let serieSet = null;
+let ultimaTavola = false;
+
+function syncSerie() {
+  $('#serieLabel').textContent = `Serie ${serie.length}/${SERIE_MAX}`;
+  $('#btnSerie').setAttribute('aria-pressed', String(serie.length > 0));
+  $('#serieRow').classList.toggle('hidden', serie.length === 0);
+  $('#seriePros').textContent = serie.length < SERIE_MAX
+    ? `Prossima posa suggerita: ${SERIE_POSE[serie.length]}`
+    : 'Serie completa: componi la tavola';
+}
+
+$('#btnSerie').addEventListener('click', async () => {
+  if (mode !== 'foto') return showToast('La serie si compone partendo dalle foto', 3200);
+  if (serie.length >= SERIE_MAX) return showToast('Cinque pose sono il massimo', 3000);
+
+  const set = serieSet || impostazioni();
+  if (serieSet) showToast('Uso le impostazioni del primo scatto, per coerenza', 2600);
+  else showToast('Elaboro il primo pannello…', 2200);
+
+  const src = await sorgentePronta(set);
+  if (!src) return;
+  const r = await exportOne(set.effect, src.fitted, src.fitted.width, src.fitted.height,
+                            src.flip, src.volto, src.maschera, set);
+  src.fitted.width = src.fitted.height = 0;
+  if (!r) return showToast('Non riesco a preparare questo pannello', 3200);
+
+  serieSet = set;
+  serie.push({ blob: r.blob, posa: SERIE_POSE[serie.length], size: r.size });
+  syncSerie();
+  if (serie.length === 1 && !set.useMask) {
+    showToast('Pannello 1 aggiunto. Per una tavola coerente conviene il fondo neutro', 4600);
+  } else {
+    showToast(`Pannello ${serie.length} aggiunto. Carica la prossima foto con 🖼️`, 4000);
+  }
+});
+
+$('#btnSvuota').addEventListener('click', () => {
+  serie = []; serieSet = null; syncSerie();
+  showToast('Serie svuotata', 2000);
+});
+
+$('#btnComponi').addEventListener('click', () => componiSerie());
+
+async function componiSerie() {
+  const n = serie.length;
+  if (!n) return;
+  showToast('Compongo la tavola…', 2600);
+
+  const cols = n <= 2 ? n : (n === 4 ? 2 : 3);
+  const rows = Math.ceil(n / cols);
+  const LIM = 2048, g = 18;
+  let cw = Math.floor((LIM - g * (cols + 1)) / cols);
+  let ch = Math.round(cw / CROP_RATIO);
+  if (rows * ch + g * (rows + 1) > LIM) {
+    ch = Math.floor((LIM - g * (rows + 1)) / rows);
+    cw = Math.round(ch * CROP_RATIO);
+  }
+  const W = cols * cw + g * (cols + 1), H = rows * ch + g * (rows + 1);
+  if (!canvasFits(W, H)) return showToast('Tavola troppo grande per questo telefono', 3600);
+
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  // stesso grigio del fondo neutro: la tavola si legge come un foglio unico
+  ctx.fillStyle = '#e0e0e6';
+  ctx.fillRect(0, 0, W, H);
+
+  for (let i = 0; i < n; i++) {
+    let bmp;
+    try { bmp = await createImageBitmap(serie[i].blob); } catch (e) { continue; }
+    const x = g + (i % cols) * (cw + g), y = g + Math.floor(i / cols) * (ch + g);
+    const k = Math.min(cw / bmp.width, ch / bmp.height);
+    const dw = Math.round(bmp.width * k), dh = Math.round(bmp.height * k);
+    ctx.drawImage(bmp, x + (cw - dw) / 2, y + (ch - dh) / 2, dw, dh);
+    if (bmp.close) bmp.close();
+  }
+
+  const blob = await toBlob(cv, 'image/png');
+  const dim = `${W}×${H}`;
+  cv.width = cv.height = 0;
+  if (!blob) return showToast('Composizione non riuscita', 3200);
+
+  // La tavola unica serve a chi accetta una sola immagine (Midjourney);
+  // i pannelli separati a chi ne accetta piu' di una (Gemini).
+  const cards = [{
+    blob, size: dim, kind: 'tavola', label: `Tavola — ${n} pose`,
+    note: 'Una sola immagine con tutte le pose: per i modelli che accettano un solo riferimento.',
+    tipo: blob.type, peso: Math.round(blob.size / 1024),
+    name: `personaggio-tavola-${n}pose.png`,
+  }];
+  serie.forEach((sp, i) => cards.push({
+    blob: sp.blob, size: sp.size || '', kind: 'posa', label: `Posa ${i + 1}`,
+    note: sp.posa + ' — utile per i modelli che accettano più riferimenti.',
+    tipo: sp.blob.type, peso: Math.round(sp.blob.size / 1024),
+    name: `personaggio-posa-${i + 1}.png`,
+  }));
+  ultimaTavola = true;
+  showResults(cards);
+}
+syncSerie();
 
 $('#btnShot').addEventListener('click', () => { shoot(); });
 
@@ -671,7 +803,7 @@ function showResults(list) {
     card.innerHTML = `
       <div class="badge ${r.kind === 'identita' ? 'badge-id' : ''}">${r.label}</div>
       <img src="${r.url}" alt="${r.label}">
-      <figcaption>${r.note}<br><span class="meta">${r.size} · ${r.tipo.indexOf('png') >= 0 ? 'PNG' : 'JPEG'} · ${r.peso} KB</span></figcaption>
+      <figcaption>${r.note}<br><span class="meta">${r.size ? r.size + ' · ' : ''}${r.tipo.indexOf('png') >= 0 ? 'PNG' : 'JPEG'} · ${r.peso} KB</span></figcaption>
       <button class="ghost-btn small" data-i="${i}">Salva / Condividi</button>`;
     card.querySelector('button').addEventListener('click', () => saveResult(i));
     box.appendChild(card);
@@ -716,77 +848,134 @@ const STYLE_WORDS = {
   ritratto:   'flat colour illustration, clean lineart',
 };
 
-function buildPrompt() {
+/* Campi della "bibbia del personaggio". Sono tutti facoltativi: quelli
+   lasciati vuoti non compaiono nel prompt. Servono a dichiarare a
+   parole cio' che la stilizzazione ha perso o falsato — il colore vero
+   degli occhi, dei capelli, dell'incarnato. */
+const CAMPI = [
+  { k: 'age',    en: 'age',                  label: 'Età',                ph: '42' },
+  { k: 'face',   en: 'face shape',           label: 'Forma del viso',     ph: 'ovale, mascella marcata' },
+  { k: 'hair',   en: 'hair',                 label: 'Capelli',            ph: 'castano scuro, corti, ciuffo alto' },
+  { k: 'eyes',   en: 'eyes',                 label: 'Occhi',              ph: 'marroni' },
+  { k: 'skin',   en: 'skin tone',            label: 'Incarnato',          ph: 'olivastro' },
+  { k: 'build',  en: 'build',                label: 'Corporatura',        ph: 'asciutta, spalle larghe' },
+  { k: 'marks',  en: 'distinctive features', label: 'Tratti distintivi',  ph: 'barba corta, sopracciglia folte' },
+  { k: 'outfit', en: 'outfit palette',       label: 'Colori dell’abito',  ph: 'maglia verde salvia' },
+];
+
+function leggiValori() {
+  try { return JSON.parse(store.get('bibbia', '{}')) || {}; } catch (e) { return {}; }
+}
+function salvaValori(v) { store.set('bibbia', JSON.stringify(v)); }
+
+/* Solo il prompt: e' questo che finisce negli appunti. */
+function buildPrompt(vals) {
   const styleId = effect === 'ritratto' ? lastStyle : effect;
   const words = STYLE_WORDS[styleId] || STYLE_WORDS.inchiostro;
-  const conCar = carOn ? '\n• La caricatura è già applicata nel disegno: non chiedere al modello di esagerare\n  ulteriormente i tratti, o il personaggio diventa una macchietta.' : '';
-  return `SENZA DARE LA FOTO VERA
+  const righe = CAMPI
+    .filter((c) => (vals[c.k] || '').trim())
+    .map((c) => `- ${c.en}: ${vals[c.k].trim()}`);
 
-Questa immagine è già il DISEGNO del personaggio, non una fotografia. È il
-percorso giusto anche tecnicamente: Midjourney dichiara che il riferimento
-di personaggio "eccelle con immagini generate" e non è ottimizzato per le
-foto reali, perché questi meccanismi sono tarati su input che stanno già nel
-dominio dell'illustrazione.
-
-Quello che il disegno ha perso — il colore vero di occhi, capelli e
-incarnato, l'età, la corporatura — lo dichiari a parole qui sotto.${conCar}
-
-COME CARICARLA
-• Midjourney V7:  --oref <immagine> --ow 150-300
-    (peso alto: il riferimento è già nello stile giusto, quindi conviene
-     fedeltà alta, al contrario di quando si parte da una foto)
-    --cw 100 se capelli e vestiario fanno parte del personaggio, --cw 0 se
-    vuoi poterli cambiare
-• Gemini / Nano Banana:  allegala come reference del personaggio
-• GPT-image:  input_fidelity="high"
-
-PROMPT (in inglese: è la lingua in cui questi modelli rendono meglio)
-
-Use the attached image as the canonical character design. Redraw and refine it
-in a consistent style for a children's picture book and comic, keeping the same
-face structure, proportions and distinctive features.
-
-STYLE: ${words}. Plain light grey background, soft frontal lighting, flat
-colours, clean lineart.
-
-CHARACTER BIBLE — reuse these exact tokens in every future prompt:
-- age: [età]
-- face shape: [forma del viso]
-- hair: [colore e taglio reali]
-- eyes: [colore reale]
-- skin tone: [incarnato reale]
-- build: [corporatura]
-- distinctive features: [2-3 tratti riconoscibili]
-- outfit palette: [colori dell'abito]
-
-This is the same character in every image. Do not restyle the face.
-
-NEGATIVE: no halftone, no Ben-Day dots, no paper grain, no newsprint texture,
-no vignette, no film grain, no posterization banding, no watermark, no text.
-
-DUE AVVERTENZE ONESTE
-1. Un disegno derivato da una foto porta con sé i limiti di quella foto. Se il
-   viso era in ombra o di tre quarti, il modello inventerà la parte che non
-   vede, e la inventerà diversa ogni volta. Conviene partire da un disegno
-   frontale, con gli occhi ben visibili.
-2. Gli artefatti dello stile locale (contorni spessi, campiture piatte)
-   vengono ereditati e a volte amplificati. Per questo l'interruttore
-   "Pulito per l'AI" spegne grana, retino e vignettatura: sono le texture che
-   un modello copia come materia del personaggio.
-
-E POI, IL PASSAGGIO CHE FA LA DIFFERENZA
-Fatti generare UN SOLO personaggio e iteralo finché non convince. Da quel
-momento il riferimento è quel disegno approvato: è così che resta lo stesso
-per tutte le tavole del libro.
-
-Se la persona ritratta non sei tu, chiedile il consenso prima di pubblicare un
-personaggio che le somiglia: una caricatura riconoscibile resta una
-somiglianza, anche se non è più una fotografia.`;
+  const parti = [];
+  parti.push(ultimaTavola
+    ? 'The attached sheet shows the same character in several poses. Treat all panels as one single character, not as different people. Use it as the canonical character design.'
+    : 'Use the attached image as the canonical character design.');
+  parti.push("Redraw and refine it in a consistent style for a children's picture book and comic, keeping the same face structure, proportions and distinctive features.");
+  parti.push(`STYLE: ${words}. Plain light grey background, soft frontal lighting, flat colours, clean lineart.`);
+  if (righe.length) {
+    parti.push('CHARACTER BIBLE — reuse these exact tokens in every future prompt:\n' + righe.join('\n'));
+  }
+  parti.push('This is the same character in every image. Keep the exact same face, hairstyle and distinctive features. Do not restyle the face.');
+  parti.push('NEGATIVE: no halftone, no Ben-Day dots, no paper grain, no newsprint texture, no vignette, no film grain, no posterization banding, no watermark, no text.');
+  return parti.join('\n\n');
 }
 
-$('#btnText').addEventListener('click', () => {
-  $('#promptText').value = buildPrompt();
+/* Istruzioni: restano a schermo, non vengono copiate. */
+function buildGuida() {
+  const pesoRif = 'Midjourney V7:  --oref <immagine> --ow 150-300\n' +
+    '  Peso alto: il riferimento e\u2019 gia\u2019 un disegno, quindi conviene fedelta\u2019 alta.\n' +
+    '  Partendo da una foto servirebbe il contrario (--ow 25-50), perche\u2019 li\u2019 il\n' +
+    '  modello deve anche cambiare dominio.\n' +
+    '  --cw 100 se capelli e vestiario fanno parte del personaggio, --cw 0 se no.';
+  return `COME CARICARLA
+${pesoRif}
+Gemini / Nano Banana:  allega l\u2019immagine come reference del personaggio.
+  Accetta piu\u2019 riferimenti: se hai composto una tavola, puoi passare anche i
+  singoli pannelli.
+GPT-image:  input_fidelity="high".
+
+PERCHE\u2019 IL DISEGNO E NON LA FOTO
+Midjourney dichiara che il riferimento di personaggio "eccelle con immagini
+generate" e non e\u2019 ottimizzato per le foto reali: questi meccanismi sono
+tarati su input che stanno gia\u2019 nel dominio dell\u2019illustrazione. Dare il
+disegno non e\u2019 un compromesso.
+
+DUE AVVERTENZE ONESTE
+1. Un disegno derivato da una foto porta con se\u2019 i limiti di quella foto. Se
+   il viso era in ombra o di tre quarti, il modello inventera\u2019 la parte che
+   non vede, e la inventera\u2019 diversa ogni volta.
+2. Gli artefatti dello stile locale (contorni spessi, campiture piatte) vengono
+   ereditati e a volte amplificati. Per questo l\u2019interruttore "Pulito per
+   l\u2019AI" spegne grana, retino e vignettatura.
+
+POI, IL PASSAGGIO CHE FA LA DIFFERENZA
+Fatti generare UN SOLO personaggio e iteralo finche\u2019 non convince. Da quel
+momento il riferimento e\u2019 quel disegno approvato: e\u2019 cosi\u2019 che resta lo
+stesso per tutte le tavole del libro.
+
+Se la persona ritratta non sei tu, chiedile il consenso prima di pubblicare un
+personaggio che le somiglia: una caricatura riconoscibile resta una somiglianza.`;
+}
+
+/* ---- pannello: campi, anteprima del prompt, copia ---- */
+
+function apriTesto() {
+  const vals = leggiValori();
+  const box = $('#campi');
+  box.innerHTML = '';
+  CAMPI.forEach((c) => {
+    const wrap = document.createElement('label');
+    wrap.className = 'campo';
+    wrap.innerHTML = `<span>${c.label}</span>
+      <input type="text" data-k="${c.k}" placeholder="${c.ph}" value="${(vals[c.k] || '').replace(/"/g, '&quot;')}">`;
+    box.appendChild(wrap);
+  });
+  box.querySelectorAll('input').forEach((i) => i.addEventListener('input', aggiornaPrompt));
+  $('#guidaTesto').textContent = buildGuida();
+  aggiornaPrompt();
   $('#textPanel').classList.remove('hidden');
+}
+
+function valoriDaiCampi() {
+  const v = {};
+  $('#campi').querySelectorAll('input').forEach((i) => { v[i.dataset.k] = i.value; });
+  return v;
+}
+
+function aggiornaPrompt() {
+  const v = valoriDaiCampi();
+  salvaValori(v);
+  $('#promptText').value = buildPrompt(v);
+  const vuoti = CAMPI.filter((c) => !(v[c.k] || '').trim()).length;
+  $('#btnCopy').textContent = vuoti === CAMPI.length ? 'Copia senza dettagli' : 'Copia il prompt';
+}
+
+$('#btnText').addEventListener('click', apriTesto);
+$('#btnCopy').addEventListener('click', async () => {
+  const testo = $('#promptText').value;
+  try {
+    await navigator.clipboard.writeText(testo);
+    $('#btnCopy').textContent = 'Copiato';
+  } catch (e) {
+    const ta = $('#promptText');
+    ta.removeAttribute('readonly');
+    ta.select();
+    ta.setSelectionRange(0, testo.length);
+    const ok = document.execCommand && document.execCommand('copy');
+    ta.setAttribute('readonly', '');
+    $('#btnCopy').textContent = ok ? 'Copiato' : 'Copia a mano dal riquadro';
+  }
+  setTimeout(aggiornaPrompt, 1800);
 });
 $('#btnTextClose').addEventListener('click', () => $('#textPanel').classList.add('hidden'));
 $('#btnCopy').addEventListener('click', async () => {

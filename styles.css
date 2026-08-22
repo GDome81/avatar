@@ -260,3 +260,47 @@ input[type=range]::-moz-range-thumb{width:24px; height:24px; border:0; border-ra
 .extra-row{display:flex; align-items:center; justify-content:center; gap:10px; padding:0 16px; flex-wrap:wrap}
 #stage:not(.photo-mode) .extra-row{display:none}
 .slider-row.hidden{display:none}
+
+/* ---------- serie ---------- */
+.serie-row{
+  display:flex; align-items:center; justify-content:center; gap:9px; padding:0 16px; flex-wrap:wrap;
+}
+.serie-row.hidden{display:none}
+#stage:not(.photo-mode) .serie-row{display:none}
+.serie-hint{
+  font-size:11.5px; color:#dcdce8; background:rgba(10,10,18,.72); padding:6px 12px; border-radius:999px;
+  backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+}
+.pill{
+  border:0; border-radius:999px; padding:9px 16px; font-size:13px; font-weight:700; cursor:pointer;
+  color:#14101c; background:linear-gradient(135deg,#9ef7c5,#5fd0ff);
+}
+.pill.ghost{background:#ffffff1c; color:var(--text); border:1px solid #ffffff2e}
+.pill:active{transform:scale(.96)}
+
+/* ---------- pannello del testo ---------- */
+.text-scroll{
+  width:100%; max-width:640px; flex:1; min-height:0; overflow-y:auto;
+  display:flex; flex-direction:column; gap:12px; padding:0 2px;
+}
+.campi{display:grid; grid-template-columns:1fr 1fr; gap:9px}
+@media (max-width:430px){ .campi{grid-template-columns:1fr} }
+.campo{display:flex; flex-direction:column; gap:4px}
+.campo span{font-size:11.5px; color:var(--muted); font-weight:600; padding-left:4px}
+.campo input{
+  background:#14141f; border:1px solid #ffffff24; border-radius:12px; color:var(--text);
+  padding:11px 13px; font-size:14px; font-family:inherit; width:100%;
+}
+.campo input:focus{outline:2px solid #5fd0ff88; outline-offset:-1px}
+.campo input::placeholder{color:#5d5d73}
+.mini-title{margin:6px 0 0; font-size:14px; font-weight:700}
+.mini-note{font-weight:500; color:var(--muted); font-size:12px}
+.guida{
+  background:#12121c; border:1px solid #ffffff1a; border-radius:14px; padding:11px 13px;
+}
+.guida summary{font-size:13px; font-weight:600; cursor:pointer}
+.guida pre{
+  margin:10px 0 0; white-space:pre-wrap; font-size:11.5px; line-height:1.5; color:var(--muted);
+  font-family:ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.prompt{min-height:26vh; flex:none}

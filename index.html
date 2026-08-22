@@ -60,6 +60,9 @@
   <div class="bottombar">
     <div class="crop-row only-photo">
       <button id="btnCrop" class="toggle" type="button" aria-pressed="false"><span class="em">🎯</span>Ritaglio</button>
+      <button id="btnSerie" class="toggle" type="button" title="Aggiungi questo scatto alla serie">
+        <span class="em">＋</span><span id="serieLabel">Serie 0/5</span>
+      </button>
       <label class="select-wrap">
         <span>Uscita</span>
         <select id="exportSize" aria-label="Risoluzione di uscita">
@@ -101,6 +104,12 @@
       </button>
     </div>
 
+    <div class="serie-row only-photo hidden" id="serieRow">
+      <span id="seriePros" class="serie-hint"></span>
+      <button id="btnComponi" class="pill">Componi la tavola</button>
+      <button id="btnSvuota" class="pill ghost">Svuota</button>
+    </div>
+
     <div class="shutter-row">
       <button id="btnRec" class="round-btn only-cam" title="Registra video" aria-label="Registra video">⏺</button>
       <button id="btnShot" class="shutter" title="Esporta immagine" aria-label="Esporta immagine"></button>
@@ -125,12 +134,26 @@
 
 <!-- ============ Testo per l'AI ============ -->
 <section id="textPanel" class="screen hidden">
-  <h2 class="results-title">Istruzioni da incollare</h2>
-  <p class="fineprint center">Il prompt è in inglese, che è la lingua in cui questi modelli rendono meglio. Sostituisci le parti tra parentesi quadre.</p>
-  <textarea id="promptText" class="prompt" readonly spellcheck="false"></textarea>
+  <h2 class="results-title">Testo per l'AI</h2>
+
+  <div class="text-scroll">
+    <p class="fineprint">Compila quello che vuoi: i campi vuoti vengono <b>tolti</b> dal prompt.
+    Servono a dichiarare a parole quello che il disegno ha perso o falsato.</p>
+
+    <div id="campi" class="campi"></div>
+
+    <details id="guida" class="guida">
+      <summary>Come caricarla, e due avvertenze</summary>
+      <pre id="guidaTesto"></pre>
+    </details>
+
+    <h3 class="mini-title">Prompt <span class="mini-note">— è solo questo che viene copiato</span></h3>
+    <textarea id="promptText" class="prompt" readonly spellcheck="false"></textarea>
+  </div>
+
   <div class="preview-actions">
     <button id="btnTextClose" class="ghost-btn">Indietro</button>
-    <button id="btnCopy" class="big-btn compact">Copia</button>
+    <button id="btnCopy" class="big-btn compact">Copia il prompt</button>
   </div>
 </section>
 

@@ -25,6 +25,23 @@ La divisione corretta è:
 | **identità** (chi è) | una foto pulita, bonificata, ritagliata |
 | **stile** (come è disegnato) | a parole nel prompt, o in uno slot di stile separato (`--sref`) |
 
+### Se non vuoi dare la foto vera
+
+È una strada legittima, non un compromesso: Midjourney dichiara che il
+riferimento di personaggio *«eccelle con immagini generate»* e non è ottimizzato
+per le foto reali, perché questi meccanismi sono tarati su input che stanno già
+nel dominio dell'illustrazione. Quindi dai il **disegno** — meglio ancora una
+**tavola con più pose** — e dichiara a parole i colori veri. In questo caso il
+peso del riferimento va **alto** (`--ow 150-300`), al contrario di quando si
+parte da una foto (`--ow 25-50`), dove serve basso perché il modello deve anche
+cambiare dominio.
+
+Due limiti da sapere: un disegno derivato da una foto eredita i limiti di quella
+foto (se il viso era di tre quarti, il modello inventerà la metà che non vede, e
+la inventerà diversa ogni volta); e gli artefatti dello stile locale vengono
+ereditati e a volte amplificati — per questo esiste l'interruttore *Pulito per
+l'AI*.
+
 Per questo lo scatto in modo foto produce una **coppia**: `identità` (foto
 bonificata, senza stilizzazione) e `stile` (la versione disegnata, da usare solo
 come indicazione del look). Il pulsante *Testo per l'AI* genera il prompt già
@@ -59,6 +76,41 @@ In modo foto:
 - **Uscita** — 1024 / 1536 / 2048 px, oppure piena. Il default 1536 è voluto: oltre i 2048 px l'identità non migliora, perché i modelli ricampionano su griglie fisse. Si guadagna **ritagliando**, non ingrandendo
 - **🤖 Pulito per l'AI** — spegne grana, retino, tratteggio e vignettatura
 - **🧩 Coppia identità + stile** — un solo scatto, due file
+- **◻️ Fondo neutro** e **🙂 Caricatura** — richiedono il rilevamento del volto (vedi sotto)
+- **＋ Serie** — fino a cinque pose in una sola tavola
+
+## La serie: fino a cinque pose
+
+Un personaggio regge le tavole successive se il modello ne vede la struttura da
+più angoli, non una sola proiezione. Quindi:
+
+1. inquadra la prima posa e tocca **＋ Serie**
+2. carica la foto successiva con 🖼️ e ripeti — l'app suggerisce la posa
+   (di fronte, tre quarti destro, tre quarti sinistro, di profilo, sorriso)
+3. tocca **Componi la tavola**
+
+Escono **due cose**: la tavola unica, per i modelli che accettano un solo
+riferimento (Midjourney), e i **pannelli separati**, per quelli che ne accettano
+più di uno (Gemini ne prende fino a cinque per la coerenza del personaggio).
+Prepararne solo uno dei due taglierebbe fuori metà dei modelli.
+
+Tutti i pannelli vengono resi con le **impostazioni del primo scatto**, anche se
+poi cambi effetto: differenze di stile fra un pannello e l'altro verrebbero lette
+come differenze del personaggio.
+
+## Il testo per l'AI
+
+Il pulsante *Testo per l'AI* apre un modulo con i campi della **bibbia del
+personaggio** — età, forma del viso, capelli, occhi, incarnato, corporatura,
+tratti distintivi, colori dell'abito. Sono tutti **facoltativi**: quelli lasciati
+vuoti vengono **tolti** dal prompt, non compaiono come segnaposto. Servono a
+dichiarare a parole ciò che la stilizzazione ha perso o falsato: il colore vero
+degli occhi e dei capelli, per esempio, che un disegno a toni piatti non conserva.
+
+Il pulsante **Copia il prompt** copia **soltanto il prompt**. Le istruzioni su
+come caricare l'immagine e le avvertenze restano a schermo, sotto *Come caricarla*:
+sono per te, non per il modello. I valori inseriti restano salvati sul telefono
+per la volta dopo.
 
 ## Gli effetti
 
@@ -68,9 +120,32 @@ In modo foto:
 | 🎨 **Cartoon** | campiture piatte, contorno marcato | buono come riferimento di stile |
 | ✨ **Anime** | cel shading a fasce, colori saturi, luce soffusa | buono come riferimento di stile |
 | ✏️ **Matita** | grafite su carta, tratteggio nelle ombre | stile |
-| 💥 **Fumetto** | retino a mezzatinta e inchiostro | solo stile: col retino spento somiglia a Cartoon |
+| 💥 **Fumetto** | inchiostro di spessore variabile, tre toni piatti, neri pieni, contorno del personaggio dalla maschera | **il migliore** come design di personaggio |
+| 🔘 **Retino** | mezzatinta alla vecchia maniera | solo stile: i pattern periodici l'AI li copia come materia |
 | 🖌️ **Acquerello** | macchie morbide, bordi umidi | stile |
 | 🌈 **Neon** | solo contorni luminosi | da non usare come riferimento |
+
+## Rilevamento del volto, in locale
+
+Fondo neutro e caricatura usano **MediaPipe Tasks Vision**, vendorizzato nel repo
+(`vendor/`) e servito dal sito stesso: nessuna CDN, nessuna immagine che esce dal
+telefono. Prima di adottarlo è stato verificato che funziona con
+`crossOriginIsolated = false`, cioè **senza** gli header COOP/COEP: su GitHub
+Pages non sono impostabili, quindi se li avesse richiesti questa strada era
+chiusa.
+
+- **478 punti del volto** → la caricatura è guidata dai landmark: occhi fino al
+  +18%, cranio più alto, mandibola più stretta. Le misure sono ancorate alla
+  **distanza interoculare**, che non cambia con l'inquadratura, e lo spostamento
+  svanisce ai bordi per non stirare lo sfondo contro la cornice.
+- **maschera persona/sfondo (243 KB)** → fondo grigio piatto, e il **contorno
+  esterno** del personaggio: chiuso, continuo e indipendente dal contrasto della
+  foto. La polarità della maschera cambia tra le versioni del modello, quindi
+  viene rilevata dai dati campionandola dove il volto è stato trovato.
+
+I 16 MB di modelli si scaricano **solo** quando accendi una di queste funzioni, e
+solo la prima volta. Funzionano sulle foto, non sull'anteprima dal vivo: lì
+servirebbe il rilevamento a ogni fotogramma.
 
 ## Come è fatto dentro
 
@@ -124,7 +199,9 @@ Due dettagli che cambiano molto il risultato sui volti:
 index.html            interfaccia
 styles.css            stile mobile-first, con aree sicure per il notch
 engine.js             shader GLSL, piramide di riduzione, renderer WebGL
-app.js                fotocamera, ritaglio guidato, esportazione, testo per l'AI
+face.js               rilevamento volto e maschera, in locale
+app.js                fotocamera, ritaglio, serie, esportazione, testo per l'AI
+vendor/               MediaPipe e modelli (16 MB, caricati su richiesta)
 manifest.webmanifest  per "Aggiungi alla schermata Home"
 ```
 
