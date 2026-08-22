@@ -20,8 +20,9 @@
   <div class="intro-card">
     <div class="logo">🎨</div>
     <h1>Cartoon Cam</h1>
-    <p class="tagline">Guardati in stile <b>cartoon</b>, <b>anime</b> o <b>disegno a matita</b>. Tutto dal telefono, in tempo reale.</p>
+    <p class="tagline">Trasformati in <b>cartoon</b>, <b>anime</b> o <b>disegno</b>: dal vivo con la fotocamera, oppure partendo da una foto della galleria, esportata a piena risoluzione per costruire un personaggio.</p>
     <button id="btnStart" class="big-btn">Attiva la fotocamera</button>
+    <button id="btnStartPick" class="ghost-btn wide">Parti da una foto della galleria</button>
     <p class="fineprint">Il video non lascia mai il tuo telefono: l'elaborazione avviene dentro il browser.</p>
   </div>
 </section>
@@ -45,8 +46,13 @@
 
   <!-- barra superiore -->
   <div class="topbar">
-    <button id="btnFlip" class="icon-btn" title="Cambia fotocamera" aria-label="Cambia fotocamera">🔄</button>
-    <div id="effectName" class="effect-name">Cartoon</div>
+    <button id="btnFlip" class="icon-btn only-cam" title="Cambia fotocamera" aria-label="Cambia fotocamera">🔄</button>
+    <button id="btnCamera" class="icon-btn only-photo" title="Torna alla fotocamera" aria-label="Torna alla fotocamera">📷</button>
+    <div class="title-group">
+      <div id="effectName" class="effect-name">Cartoon</div>
+      <span id="modeLabel" class="mode-label"></span>
+    </div>
+    <button id="btnPick" class="icon-btn" title="Usa una foto dalla galleria" aria-label="Usa una foto dalla galleria">🖼️</button>
     <button id="btnFull" class="icon-btn" title="Schermo intero" aria-label="Schermo intero">⛶</button>
   </div>
 
@@ -59,10 +65,16 @@
 
     <div id="effects" class="effects"></div>
 
+    <div class="toggle-row">
+      <button id="btnClean" class="toggle" type="button" aria-pressed="true">
+        <span class="em">🤖</span>Pulito per l’AI
+      </button>
+    </div>
+
     <div class="shutter-row">
-      <button id="btnRec" class="round-btn" title="Registra video" aria-label="Registra video">⏺</button>
-      <button id="btnShot" class="shutter" title="Scatta foto" aria-label="Scatta foto"></button>
-      <button id="btnFreeze" class="round-btn" title="Congela immagine" aria-label="Congela immagine">⏸</button>
+      <button id="btnRec" class="round-btn only-cam" title="Registra video" aria-label="Registra video">⏺</button>
+      <button id="btnShot" class="shutter" title="Esporta immagine" aria-label="Esporta immagine"></button>
+      <button id="btnFreeze" class="round-btn only-cam" title="Congela immagine" aria-label="Congela immagine">⏸</button>
     </div>
   </div>
 
@@ -84,6 +96,9 @@
   <p id="saveHint" class="fineprint center">Su iPhone: tieni premuto sull'immagine e scegli “Aggiungi a Foto”.</p>
 </section>
 
+<input id="filePick" type="file" accept="image/*" hidden>
+
+<script src="engine.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
