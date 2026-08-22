@@ -48,7 +48,7 @@ uniform sampler2D u_tex;       // dettaglio (piena risoluzione)
 uniform sampler2D u_mid;       // livello contorni
 uniform sampler2D u_base;      // livello colore
 uniform sampler2D u_mask;      // maschera persona/sfondo (1 = persona)
-uniform vec2  u_midTexel;      // 1.0 / dimensione del livello contorni
+uniform vec2  u_midTexel;      // passo di riferimento: 1/900 del lato lungo
 uniform vec2  u_baseTexel;     // 1.0 / dimensione del livello colore
 uniform float u_scale;         // lato lungo in uscita / 900: scala i pattern in pixel
 uniform float u_amount;        // 0..1 intensita'
@@ -509,7 +509,12 @@ function scratch(i) {
   return scratchPool[i];
 }
 
-function downscale(source, sw, sh, longSide, reuse) {
+/* soglia: oltre quante volte di riduzione si passa per un dimezzamento
+   intermedio. Due da' la qualita' migliore ed e' quella dell'export;
+   dal vivo si usa tre, dove un passaggio in meno vale piu' di un filo
+   di aliasing su un'anteprima. */
+function downscale(source, sw, sh, longSide, reuse, soglia) {
+  const lim = soglia || 2;
   const k = Math.min(1, longSide / Math.max(sw, sh));
   const tw = Math.max(1, Math.round(sw * k));
   const th = Math.max(1, Math.round(sh * k));
@@ -517,11 +522,15 @@ function downscale(source, sw, sh, longSide, reuse) {
   // I canvas intermedi vengono riusati: nell'anteprima questa
   // funzione gira trenta volte al secondo.
   let src = source, cw = sw, ch = sh, step = 0;
-  while (cw > tw * 2 && ch > th * 2) {
+  while (cw > tw * lim && ch > th * lim) {
     const nw = Math.max(tw, cw >> 1);
     const nh = Math.max(th, ch >> 1);
     const tmp = scratch(step++);
-    tmp.width = nw; tmp.height = nh;
+    // assegnare width/height ricrea il buffer del canvas anche con lo
+    // stesso valore: a trenta fotogrammi al secondo e' spazzatura da
+    // raccogliere che si accumula, ed e' una delle ragioni per cui
+    // l'anteprima peggiora col passare dei secondi
+    if (tmp.width !== nw || tmp.height !== nh) { tmp.width = nw; tmp.height = nh; }
     const c2 = tmp.getContext('2d');
     c2.imageSmoothingEnabled = true;
     c2.imageSmoothingQuality = 'high';
@@ -529,7 +538,7 @@ function downscale(source, sw, sh, longSide, reuse) {
     src = tmp; cw = nw; ch = nh;
   }
   const out = reuse || document.createElement('canvas');
-  out.width = tw; out.height = th;
+  if (out.width !== tw || out.height !== th) { out.width = tw; out.height = th; }
   const ctx = out.getContext('2d');
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
@@ -615,6 +624,7 @@ class Renderer {
     this.sizes = { detail: [1, 1], mid: [1, 1], base: [1, 1], mask: [1, 1] };
     this.hasMask = false;
     this.face = null;
+    this.checkErrors = true;    // l'anteprima dal vivo lo spegne
   }
 
   makeTexture() {
@@ -667,13 +677,26 @@ class Renderer {
   put(tex, source, w, h, slot) {
     const gl = this.gl;
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, source);
-    // Un upload oltre MAX_TEXTURE_SIZE non lancia eccezioni: la texture
-    // resta vuota e l'immagine esce nera. L'unico modo di accorgersene
-    // e' leggere l'errore subito dopo.
-    const err = gl.getError();
-    if (err !== gl.NO_ERROR) this.uploadError = { slot, err, w, h };
-    this.sizes[slot] = [w, h];
+    /* Se la misura non e' cambiata si aggiorna il contenuto della
+       texture invece di riallocarla: texImage2D butta via il buffer sulla
+       scheda grafica e ne chiede un altro a ogni fotogramma. */
+    const prec = this.sizes[slot];
+    if (prec && prec[0] === w && prec[1] === h && prec[2] === true) {
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGB, gl.UNSIGNED_BYTE, source);
+    } else {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, source);
+    }
+    /* Un upload oltre MAX_TEXTURE_SIZE non lancia eccezioni: la texture
+       resta vuota e l'immagine esce nera. L'unico modo di accorgersene e'
+       leggere l'errore subito dopo — ma getError obbliga a un giro di
+       andata e ritorno col processo grafico, quindi nell'anteprima dal
+       vivo, dove gira trenta volte al secondo, si salta: li' le
+       dimensioni sono piccole e sicure. */
+    if (this.checkErrors) {
+      const err = gl.getError();
+      if (err !== gl.NO_ERROR) this.uploadError = { slot, err, w, h };
+    }
+    this.sizes[slot] = [w, h, true];
   }
 
   /* Carica i tre livelli a partire da una sorgente (video, immagine
@@ -682,21 +705,34 @@ class Renderer {
   load(source, sw, sh, opts) {
     const o = opts || {};
     this.uploadError = null;
+    const outSide = Math.min(o.outSide || MID_SIDE, this.maxTexture);
 
-    /* Il livello di dettaglio viene portato alla risoluzione di uscita
-       e comunque sotto il limite di texture del dispositivo. Due
-       motivi: una foto da 4608 px caricata tale quale su una GPU con
-       limite 4096 fallisce in silenzio; e minificare una texture senza
-       mipmap campiona per punti, quindi il microcontrasto arriverebbe
-       come rumore aliasato invece che come dettaglio. */
-    const detSide = Math.min(o.outSide || MID_SIDE, this.maxTexture);
-    const shrink = Math.max(sw, sh) > detSide * 1.25;
-    const det = shrink ? downscale(source, sw, sh, detSide, o.detailCanvas) : source;
-    this.put(this.texDetail, det, shrink ? det.width : sw, shrink ? det.height : sh, 'detail');
-    const mid = o.mid || (Math.max(sw, sh) <= MID_SIDE * 1.25 ? null : downscale(source, sw, sh, MID_SIDE, o.midCanvas));
-    if (mid) this.put(this.texMid, mid, mid.width, mid.height, 'mid');
-    else { this.put(this.texMid, source, sw, sh, 'mid'); }
-    const base = o.base || downscale(mid || source, mid ? mid.width : sw, mid ? mid.height : sh, BASE_SIDE, o.baseCanvas);
+    /* Livello di DETTAGLIO, ridotto alla risoluzione di uscita.
+
+       Misurato: caricare il <video> nativo direttamente come texture
+       costa piu' che ridurlo prima — sono megabyte di upload a ogni
+       fotogramma invece di poche centinaia di kilobyte, e il
+       ridimensionamento su canvas e' accelerato. Vale anche la ragione
+       di correttezza: minificare una texture senza mipmap campiona per
+       punti, e il microcontrasto arriverebbe come rumore aliasato. */
+    let det = source, dw = sw, dh = sh;
+    const soglia = o.live ? 3 : 2;
+    if (Math.max(sw, sh) > outSide * 1.25) {
+      det = downscale(source, sw, sh, outSide, o.detailCanvas, soglia);
+      dw = det.width; dh = det.height;
+    }
+    this.put(this.texDetail, det, dw, dh, 'detail');
+
+    /* Livello dei CONTORNI: si costruisce piccolo, perche' il passo di
+       ricerca e' normalizzato sull'immagine e non sui suoi texel. Serve
+       anche come termine di confronto per il microcontrasto, quindi deve
+       restare piu' morbido del dettaglio. */
+    const midSide = Math.max(320, Math.round(outSide * 0.6));
+    const mid = downscale(det, dw, dh, midSide, o.midCanvas, soglia);
+    this.put(this.texMid, mid, mid.width, mid.height, 'mid');
+
+    /* Livello del COLORE: dal livello dei contorni, che e' gia' piccolo. */
+    const base = o.base || downscale(mid, mid.width, mid.height, BASE_SIDE, o.baseCanvas, soglia);
     this.put(this.texBase, base, base.width, base.height, 'base');
     this.avg = averageColor(base);
   }
@@ -726,7 +762,15 @@ class Renderer {
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.texBase);   gl.uniform1i(s.u_base, 2);
     gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.texMask);   gl.uniform1i(s.u_mask, 3);
 
-    gl.uniform2f(s.u_midTexel,  1 / this.sizes.mid[0],  1 / this.sizes.mid[1]);
+    /* Il passo con cui si cercano i contorni e' una FRAZIONE
+       DELL'IMMAGINE, non un texel del livello: 1/900 del lato lungo.
+       Cosi' quel livello puo' essere costruito a qualunque risoluzione
+       — e conviene costruirlo piccolo, perche' e' il pezzo piu' caro di
+       tutta l'elaborazione — senza che lo spessore della linea cambi. */
+    const asp = w / h;
+    const rw = asp >= 1 ? MID_SIDE : MID_SIDE * asp;
+    const rh = asp >= 1 ? MID_SIDE / asp : MID_SIDE;
+    gl.uniform2f(s.u_midTexel, 1 / rw, 1 / rh);
     gl.uniform2f(s.u_baseTexel, 1 / this.sizes.base[0], 1 / this.sizes.base[1]);
     gl.uniform1f(s.u_scale,  Math.max(w, h) / MID_SIDE);
     gl.uniform1f(s.u_amount, o.amount);

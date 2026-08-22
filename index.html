@@ -82,6 +82,7 @@
     </div>
   </div>
 
+  <div id="diag" class="diag hidden"></div>
   <div id="toast" class="toast"></div>
   <div id="recBadge" class="rec-badge hidden"><span class="dot"></span><span id="recTime">0:00</span></div>
 </main>
@@ -157,12 +158,21 @@
       <button id="btnAzzeraSerie" class="pill ghost">Azzera</button>
     </div>
 
+    <div class="row">
+      <span class="lab">Mostra le prestazioni
+        <span class="hint">Fotogrammi al secondo e millisecondi per fotogramma: serve a capire se il telefono fa fatica.</span>
+      </span>
+      <button id="btnDiag" class="switch" type="button" aria-pressed="false" aria-label="Mostra le prestazioni"></button>
+    </div>
+
     <button id="btnFull" class="ghost-btn wide small-btn">Schermo intero</button>
+    <button class="ghost-btn wide small-btn js-home" type="button">Torna alla schermata iniziale</button>
   </div>
 </section>
 
 <!-- ============ Risultati ============ -->
 <section id="preview" class="screen hidden">
+  <button class="corner-btn js-home" type="button">← Home</button>
   <h2 class="results-title" id="resultsTitle">Pronta</h2>
   <div id="results" class="results"></div>
 
@@ -186,6 +196,7 @@
 
 <!-- ============ Testo per l'AI ============ -->
 <section id="textPanel" class="screen hidden">
+  <button class="corner-btn js-home" type="button">← Home</button>
   <h2 class="results-title">Testo per l'AI</h2>
   <div class="text-scroll">
     <h3 class="mini-title">Stile da chiedere all'AI</h3>

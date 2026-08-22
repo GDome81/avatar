@@ -227,7 +227,30 @@ Due dettagli che cambiano molto il risultato sui volti:
   includere `image/heic` farebbe **convertire in HEIC** su Safari 17+, cioè
   produrrebbe il file che gli altri browser non leggono
 - se il telefono fatica, l'anteprima abbassa la risoluzione da sola e la rialza
-  quando può
+  quando può; nel pannello si può accendere l'indicatore delle **prestazioni**
+  (fotogrammi al secondo, millisecondi per fotogramma, risoluzione)
+
+### Il costo dell'anteprima dal vivo, misurato
+
+L'anteprima era lenta e a scatti, e il colpevole non era quello che sembrava.
+Misurato per pezzi, `load()` — la preparazione dei tre livelli — pesava 95 ms per
+fotogramma contro **zero** del disegno, e dentro `load()` il 80% era
+`downscale`, chiamato **tre volte** per fotogramma. Il `getImageData` che
+sembrava il sospetto naturale costava 0,1 ms.
+
+Le cause vere e cosa è cambiato:
+
+| Problema | Rimedio |
+|---|---|
+| il livello dei contorni veniva costruito a 900 px **anche con l'uscita a 495**, cioè più grande dell'immagine disegnata | il passo di ricerca dei contorni è una frazione dell'immagine (1/900 del lato lungo), non un texel: il livello si costruisce piccolo senza che lo spessore della linea cambi |
+| `gl.getError()` dopo ogni caricamento di texture, tre volte per fotogramma | obbliga a un giro con il processo grafico: resta solo sull'esportazione, dove serve a intercettare le immagini nere |
+| si disegnava a 60 fotogrammi al secondo su un video che ne dà 30 | si salta il fotogramma se `currentTime` non è cambiato |
+| `canvas.width = …` e `texImage2D` a ogni fotogramma riallocano i buffer anche a misura invariata | si riassegna solo se la misura cambia, e si usa `texSubImage2D` |
+| ogni ritorno in primo piano avviava un **secondo** ciclo di rendering sopra il primo | un solo ciclo, con guardia |
+
+Risultato nel banco di prova (rendering software, quindi pessimistico):
+119 ms → 60 ms per fotogramma, da 8 a 17 fotogrammi al secondo. L'heap resta
+piatto su 20 secondi, quindi non c'erano perdite di memoria.
 
 ## Struttura
 

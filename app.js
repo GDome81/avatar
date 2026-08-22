@@ -83,6 +83,19 @@ amountInput.addEventListener('input', () => {
   redrawIfPhoto();
 });
 
+let diagOn = store.get('diag', '0') === '1';
+const diagBtn = $('#btnDiag');
+function syncDiag() {
+  diagBtn.setAttribute('aria-pressed', String(diagOn));
+  $('#diag').classList.toggle('hidden', !diagOn);
+}
+diagBtn.addEventListener('click', () => {
+  diagOn = !diagOn;
+  store.set('diag', diagOn ? '1' : '0');
+  syncDiag();
+});
+syncDiag();
+
 const cleanBtn = $('#btnClean');
 function syncClean() {
   cleanBtn.setAttribute('aria-pressed', String(clean));
@@ -145,7 +158,7 @@ async function startCamera() {
   }
   frozen = false; hasFrame = false; quality = 1;
   startTime = performance.now();
-  loop();
+  avviaLoop();
 }
 
 function ensureRenderer() {
@@ -171,7 +184,7 @@ function describeError(err) {
 }
 
 function fail(msg) {
-  cancelAnimationFrame(raf);
+  fermaLoop();
   stopStream();
   stage.classList.add('hidden');
   intro.classList.add('hidden');
@@ -186,17 +199,46 @@ function stopStream() {
 
 let frames = 0, fpsMark = 0;
 
+let ultimoTempoVideo = -1;
+
+let loopAttivo = false;
+
+function avviaLoop() {
+  if (loopAttivo) return;      // un solo ciclo per volta
+  loopAttivo = true;
+  loop();
+}
+
+function fermaLoop() {
+  loopAttivo = false;
+  cancelAnimationFrame(raf);
+}
+
 function loop() {
+  if (!loopAttivo) return;
   raf = requestAnimationFrame(loop);
   if (mode !== 'fotocamera') return;
   const vw = video.videoWidth, vh = video.videoHeight;
   if (!vw || !vh || video.readyState < 2) return;
 
+  /* Il video consegna trenta immagini al secondo, il browser chiede di
+     disegnare sessanta volte: senza questo controllo metà del lavoro
+     rifà lo stesso fotogramma. */
+  if (!frozen && video.currentTime === ultimoTempoVideo) return;
+  ultimoTempoVideo = video.currentTime;
+
   const k = Math.min(1, (PREVIEW_MAX * quality) / Math.max(vw, vh));
   const w = Math.max(2, Math.round(vw * k)), h = Math.max(2, Math.round(vh * k));
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
 
-  if (!frozen) { renderer.load(video, vw, vh, { midCanvas, baseCanvas, detailCanvas, outSide: Math.max(canvas.width, canvas.height) }); hasFrame = true; }
+  if (!frozen) {
+    renderer.checkErrors = false;      // niente giri col processo grafico a ogni frame
+    renderer.load(video, vw, vh, {
+      live: true, midCanvas, baseCanvas, detailCanvas,
+      outSide: Math.max(canvas.width, canvas.height),
+    });
+    hasFrame = true;
+  }
   if (!hasFrame) return;
 
   renderer.draw(effect, {
@@ -212,6 +254,10 @@ function loop() {
     const fps = (frames * 1000) / (now - fpsMark);
     if (fps < 24 && quality > 0.55) quality = Math.max(0.55, quality - 0.15);
     else if (fps > 52 && quality < 1) quality = Math.min(1, quality + 0.1);
+    if (diagOn) {
+      $('#diag').textContent =
+        `${fps.toFixed(0)} fps · ${(1000 / Math.max(fps, 0.1)).toFixed(0)} ms · ${canvas.width}×${canvas.height} · q ${quality.toFixed(2)}`;
+    }
     frames = 0; fpsMark = now;
   }
 }
@@ -283,7 +329,7 @@ async function loadPhoto(file) {
   photo = { source: src, w: w0, h: h0 };
 
   showStage();
-  cancelAnimationFrame(raf);
+  fermaLoop();
   stopStream();
   if (!ensureRenderer()) return;
   setMode('foto');
@@ -1018,6 +1064,27 @@ async function saveResult(i) {
 
 $('#btnClose').addEventListener('click', () => preview.classList.add('hidden'));
 
+/* Ritorno alla schermata iniziale: chiude tutto, spegne la fotocamera e
+   libera le immagini in memoria, altrimenti restano appese. */
+function tornaHome() {
+  fermaLoop();
+  stopStream();
+  azzeraSerie();
+  if (photo && photo.source && photo.source.close) photo.source.close();
+  photo = null;
+  results.forEach((r) => { if (r.url) URL.revokeObjectURL(r.url); });
+  results = [];
+  ultimaTavola = false;
+  apriSheet(false);
+  preview.classList.add('hidden');
+  $('#textPanel').classList.add('hidden');
+  stage.classList.add('hidden');
+  errorScreen.classList.add('hidden');
+  intro.classList.remove('hidden');
+}
+
+document.querySelectorAll('.js-home').forEach((b) => b.addEventListener('click', tornaHome));
+
 /* ---------------------------------------------------------
    Testo per l'AI
    --------------------------------------------------------- */
@@ -1274,7 +1341,7 @@ $('#btnStartShot').addEventListener('click', () => fileShot.click());
 $('#btnFlip').addEventListener('click', () => {
   facing = facing === 'user' ? 'environment' : 'user';
   store.set('facing', facing);
-  cancelAnimationFrame(raf);
+  fermaLoop();
   startCamera();
 });
 
@@ -1396,9 +1463,9 @@ syncSerie();
 
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
-    cancelAnimationFrame(raf);
+    fermaLoop();
     if (recorder && recorder.state === 'recording') stopRecording();
   } else if (stream && mode === 'fotocamera') {
-    loop();
+    avviaLoop();
   }
 });
