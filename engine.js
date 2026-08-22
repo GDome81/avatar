@@ -33,12 +33,21 @@ void main(){
 }`;
 
 const PRELUDE = `
+/* Su molte GPU mobili mediump ha una decina di bit di mantissa. Qui si
+   lavora su differenze dell'ordine del millesimo e su coordinate in
+   pixel che arrivano a qualche migliaio: in mediump il retino e la
+   grana degenerano in strisce. */
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
 precision mediump float;
+#endif
 varying vec2 v_uv;
 
 uniform sampler2D u_tex;       // dettaglio (piena risoluzione)
 uniform sampler2D u_mid;       // livello contorni
 uniform sampler2D u_base;      // livello colore
+uniform sampler2D u_mask;      // maschera persona/sfondo (1 = persona)
 uniform vec2  u_midTexel;      // 1.0 / dimensione del livello contorni
 uniform vec2  u_baseTexel;     // 1.0 / dimensione del livello colore
 uniform float u_scale;         // lato lungo in uscita / 900: scala i pattern in pixel
@@ -47,13 +56,31 @@ uniform float u_clean;         // 1.0 = senza grana/vignetta/retino (uso come re
 uniform vec3  u_avg;           // colore medio della scena: serve al bilanciamento del bianco
 uniform float u_time;
 
+uniform float u_hasMask;       // 1.0 = maschera della persona disponibile
+uniform float u_bgFlat;        // 1.0 = sostituisci lo sfondo col fondo piatto
+uniform vec3  u_bg;            // colore del fondo piatto
+
+/* Caricatura: misure del volto in coordinate normalizzate. */
+uniform float u_hasFace;
+uniform float u_car;           // 0 = nessuna caricatura, 1 = massima
+uniform vec2  u_eyeL, u_eyeR;  // pupille
+uniform vec2  u_brow, u_chin;  // fronte, mento
+uniform float u_eyeRad;        // raggio dell'occhio
+uniform float u_aspect;        // larghezza/altezza, per misurare distanze vere
+
 vec2 cl(vec2 uv){ return clamp(uv, vec2(0.001), vec2(0.999)); }
 vec3 tx(vec2 uv){ return texture2D(u_tex,  cl(uv)).rgb; }
 vec3 md(vec2 uv){ return texture2D(u_mid,  cl(uv)).rgb; }
 vec3 bs(vec2 uv){ return texture2D(u_base, cl(uv)).rgb; }
 
 float lum(vec3 c){ return dot(c, vec3(0.299, 0.587, 0.114)); }
-float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+/* Senza sin(): con coordinate in pixel l'argomento arriva a 1e6 e la
+   funzione perde ogni entropia proprio dove serve. */
+float hash(vec2 p){
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
 
 /* Ammorbidisce ulteriormente il livello colore. k e' in texel del
    livello colore, quindi in frazione dell'immagine: invariante. */
@@ -82,13 +109,135 @@ float sobelAt(sampler2D t, vec2 uv, vec2 texel, float k){
 }
 float edgeMid(vec2 uv, float k){ return sobelAt(u_mid, uv, u_midTexel, k); }
 
-/* Microcontrasto: quanto il dettaglio si discosta dal livello
-   contorni. Serve a non perdere occhi, denti e montature quando
-   il colore viene appiattito. */
+/* Sfumatura sul livello contorni: serve alla differenza di gaussiane. */
+float midSoft(vec2 uv, float k){
+  vec2 sp = u_midTexel * k;
+  float o = lum(md(uv)) * 4.0;
+  o += (lum(md(uv + vec2(sp.x, 0.0))) + lum(md(uv - vec2(sp.x, 0.0)))
+      + lum(md(uv + vec2(0.0, sp.y))) + lum(md(uv - vec2(0.0, sp.y)))) * 2.0;
+  o += lum(md(uv + sp)) + lum(md(uv - sp))
+     + lum(md(uv + vec2(sp.x, -sp.y))) + lum(md(uv + vec2(-sp.x, sp.y)));
+  return o / 16.0;
+}
+
 /* Limitato in ampiezza: senza il clamp un bordo molto contrastato
    (occhiali, denti, capelli sul cielo) genera un alone chiaro/scuro
    che l'AI legge come un tratto del personaggio. */
 float relief(vec2 uv){ return clamp(lum(tx(uv)) - lum(md(uv)), -0.14, 0.14); }
+
+/* Linea di inchiostro.
+
+   La differenza di gaussiane classica (XDoG) usa una soglia assoluta,
+   che su foto con esposizioni diverse produce ora troppa linea ora
+   nessuna. Qui la differenza e' normalizzata sulla luminanza locale:
+   "quanto questo punto e' piu' scuro del suo intorno, in proporzione".
+   Il risultato e' indipendente dall'esposizione, e la soglia morbida
+   da' una linea di spessore variabile invece di un contorno uniforme
+   da fotocopia. */
+float inkLine(vec2 uv, float k, float soglia, float morbido){
+  float a = midSoft(uv, k);
+  float b = midSoft(uv, k * 3.0);
+  float scuro = (b - a) / max(b, 0.06);
+  float ink = smoothstep(soglia, soglia + morbido, scuro);
+  // sotto una certa differenza assoluta non c'e' niente da disegnare:
+  // senza questa porta la pelle e il rumore JPEG diventano tratteggio
+  return ink * smoothstep(0.005, 0.018, b - a);
+}
+
+/* Spessore variabile del tratto. Non si cambia il raggio del
+   rilevatore, si sposta la SOGLIA: piu' bassa dove un inchiostratore
+   calcherebbe (in ombra), piu' alta sul dettaglio fine, cosi' occhi e
+   denti restano aperti invece di riempirsi. */
+float inkVar(vec2 uv, float k, float base, float morbido){
+  float tono = lum(bsSoft(uv, 2.0));
+  float ombra = smoothstep(0.55, 0.12, tono);
+  float fine  = smoothstep(0.02, 0.10, abs(relief(uv)));
+  float soglia = base * (1.0 - 0.45 * ombra + 0.55 * fine);
+  return inkLine(uv, k, max(soglia, 0.012), morbido);
+}
+
+/* Contorno esterno del personaggio, preso dal bordo della maschera.
+   E' la linea che un disegnatore traccia per prima: chiusa, continua,
+   e indipendente dal contrasto della foto. */
+float maskEdge(vec2 uv, float k){
+  if (u_hasMask < 0.5) return 0.0;
+  vec2 sp = u_midTexel * k;
+  float gx = texture2D(u_mask, cl(uv + vec2(sp.x, 0.0))).r
+           - texture2D(u_mask, cl(uv - vec2(sp.x, 0.0))).r;
+  float gy = texture2D(u_mask, cl(uv + vec2(0.0, sp.y))).r
+           - texture2D(u_mask, cl(uv - vec2(0.0, sp.y))).r;
+  return length(vec2(gx, gy));
+}
+
+/* ---- caricatura ----
+   Warp per feature in mappatura inversa: per INGRANDIRE una zona, la
+   coordinata di campionamento si sposta VERSO il centro della zona.
+   Il peso segue una smoothstep sul raggio, cosi' non si vedono
+   gradini, e la somma degli spostamenti svanisce ai bordi
+   dell'inquadratura, altrimenti lo sfondo appare stirato. */
+vec2 lente(vec2 uv, vec2 c, float r, float forza){
+  vec2 d = (uv - c) * vec2(u_aspect, 1.0);
+  float len = length(d);
+  if (len >= r) return uv;
+  float t = 1.0 - len / r;
+  float w = t * t * (3.0 - 2.0 * t);
+  return c + (uv - c) / (1.0 + forza * w);
+}
+
+vec2 warp(vec2 uv0){
+  if (u_hasFace < 0.5 || u_car < 0.01) return uv0;
+  float k = u_car;
+  vec2 uv = uv0;
+
+  /* Tutte le misure sono ancorate alla distanza interoculare: e' la
+     grandezza piu' stabile del volto, non cambia con l'inquadratura
+     ne' con la posa come farebbero l'altezza del viso o il ritaglio. */
+  float d = max(length((u_eyeR - u_eyeL) * vec2(u_aspect, 1.0)), 0.001);
+
+  // occhi piu' grandi: al massimo del 18%
+  uv = lente(uv, u_eyeL, d * 0.95, 0.18 * k);
+  uv = lente(uv, u_eyeR, d * 0.95, 0.18 * k);
+
+  /* Cranio piu' alto. Uno stiramento verticale sopra la linea delle
+     sopracciglia, non una bolla radiale: la bolla gonfia anche lo
+     sfondo attorno alla testa e si vede subito. */
+  float browY = u_brow.y;
+  if (uv.y < browY) {
+    float t = clamp((browY - uv.y) / max(browY, 0.001), 0.0, 1.0);
+    float win = smoothstep(0.0, 0.30, t) * (1.0 - smoothstep(0.80, 1.0, t));
+    uv.y = browY - (browY - uv.y) / (1.0 + 0.10 * k * win);
+  }
+
+  /* Mandibola piu' stretta, verso l'asse del volto. */
+  float jawY = mix(u_brow.y, u_chin.y, 0.72);
+  if (uv.y > jawY) {
+    float t = clamp((uv.y - jawY) / max(u_chin.y - jawY, 0.001), 0.0, 1.0);
+    float win = smoothstep(0.0, 0.45, t);
+    uv.x = u_chin.x + (uv.x - u_chin.x) / (1.0 - 0.09 * k * win);
+  }
+
+  /* Lo spostamento totale svanisce ai bordi dell'inquadratura,
+     altrimenti si vede lo sfondo stirato contro la cornice. */
+  vec2 disp = uv - uv0;
+  float bordo = min(min(uv0.x, 1.0 - uv0.x), min(uv0.y, 1.0 - uv0.y));
+  return uv0 + disp * smoothstep(0.0, 0.08, bordo);
+}
+
+/* Composizione finale: dove c'e' la maschera, lo sfondo diventa un
+   fondo piatto. Un design di personaggio su fondo uniforme e' anche
+   cio' che serve a un modello generativo: lo sfondo di una foto
+   rientrerebbe come palette e ambientazione in tutte le tavole. */
+vec4 finish(vec3 c, vec2 uv){
+  if (u_bgFlat > 0.5) {
+    float m = texture2D(u_mask, cl(uv)).r;
+    c = mix(u_bg, c, smoothstep(0.30, 0.62, m));
+  }
+  return vec4(clamp(c, 0.0, 1.0), 1.0);
+}
+
+/* Microcontrasto: quanto il dettaglio si discosta dal livello
+   contorni. Serve a non perdere occhi, denti e montature quando
+   il colore viene appiattito. */
 
 vec3 rgb2hsv(vec3 c){
   vec4 K = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
@@ -151,84 +300,120 @@ vec3 quantize(vec3 c, float levels){
 const FRAG = {
 
   /* ------- Ritratto: nessuna stilizzazione, solo bonifica -------
-     E' la versione da dare all'AI come riferimento di IDENTITA':
-     niente contorni, niente campiture, niente grana. Corregge la
-     dominante di colore, recupera le ombre sul viso e ravviva il
-     microcontrasto, che e' l'informazione da cui un modello estrae
-     i tratti somatici. */
+     Non viene deformato: e' la versione fedele. */
   ritratto: `
   void main(){
     float a = u_amount;
     vec3 c = tx(v_uv);
-
-    // Bilanciamento del bianco alla "grey world": porta il colore
-    // medio della scena verso il neutro. Su un controluce al
-    // tramonto e' la correzione che conta piu' di tutte.
     vec3 gain = vec3(lum(u_avg)) / max(u_avg, vec3(0.05));
     gain = clamp(gain, vec3(0.72), vec3(1.45));
     c *= mix(vec3(1.0), gain, a);
-
-    // Recupero delle ombre: agisce solo sui toni bassi, cosi' il
-    // viso in ombra emerge senza bruciare le alte luci.
     vec3 lifted = pow(clamp(c, 0.0, 1.0), vec3(1.0 / (1.0 + 0.75 * a)));
     c = mix(c, lifted, smoothstep(0.60, 0.03, lum(c)));
-
-    c += relief(v_uv) * 0.35 * a;                    // nitidezza sui tratti
-    c = mix(vec3(lum(c)), c, 1.0 + 0.12 * a);        // saturazione appena piena
-    c = (c - 0.5) * (1.0 + 0.10 * a) + 0.5;          // contrasto misurato
-    gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+    c += relief(v_uv) * 0.35 * a;
+    c = mix(vec3(lum(c)), c, 1.0 + 0.12 * a);
+    c = (c - 0.5) * (1.0 + 0.10 * a) + 0.5;
+    gl_FragColor = finish(c, v_uv);
   }`,
 
   /* ------- Cartoon: campiture piatte + contorno marcato ------- */
   cartoon: `
   void main(){
+    vec2 uv = warp(v_uv);
     float a = u_amount;
-    vec3 c = quantize(flatten(v_uv, 0.6 + a * 1.1, 4.0 + a * 3.0), mix(14.0, 6.0, a));
+    vec3 c = quantize(flatten(uv, 0.6 + a * 1.1, 4.0 + a * 3.0), mix(14.0, 6.0, a));
     c = satBoost(c, a * 0.7);
     c = clamp(c * 1.06 + 0.02, 0.0, 1.0);
-    c += relief(v_uv) * (0.55 - a * 0.15);                  // tiene occhi e denti leggibili
-    float e = edgeMid(v_uv, 1.0 + a);
+    c += relief(uv) * (0.55 - a * 0.15);
+    float e = edgeMid(uv, 1.0 + a);
     float edge = smoothstep(mix(0.60, 0.16, a), mix(0.90, 0.44, a), e);
     c = mix(c, vec3(0.06, 0.05, 0.09), edge);
-    gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+    gl_FragColor = finish(c, uv);
+  }`,
+
+  /* ------- Fumetto: inchiostro XDoG su tre toni piatti -------
+     E' la modalita' pensata come "design del personaggio": linea di
+     spessore variabile, neri pieni nelle ombre, nessuna texture
+     periodica che un modello generativo copierebbe come materia. */
+  inchiostro: `
+  void main(){
+    vec2 uv = warp(v_uv);
+    float a = u_amount;
+
+    /* Tre toni piatti, con le soglie riferite alla luminanza media
+       della scena: soglie assolute darebbero un viso tutto bianco su
+       una foto chiara e tutto in ombra su una scura. */
+    vec3 hsv = rgb2hsv(flatten(uv, 0.5, 9.0));
+    float lVera = hsv.z;                     // luminanza prima della quantizzazione
+    float m = clamp(lum(u_avg), 0.20, 0.80);
+    float t1 = m * mix(1.20, 1.08, a);
+    float t2 = m * mix(0.80, 0.66, a);
+    hsv.z = 0.58
+      + 0.20 * smoothstep(t2 - 0.04, t2 + 0.04, lVera)
+      + 0.22 * smoothstep(t1 - 0.04, t1 + 0.04, lVera);
+    hsv.y = clamp(hsv.y * (1.0 + 0.55 * a), 0.0, 1.0);
+    vec3 c = hsv2rgb(hsv);
+
+    /* Una sola passata di linea, fine. Una seconda passata a raggio
+       largo riempiva di nero occhi, naso e bocca: rispondeva all'intera
+       zona in ombra, non al suo bordo. */
+    float ink = inkVar(uv, 3.0, mix(0.10, 0.030, a), 0.05);
+    ink = max(ink, smoothstep(0.12, 0.45, maskEdge(uv, 2.0)));   // contorno del personaggio
+
+    /* Neri pieni nelle ombre profonde, misurati sulle luminanze vere e
+       non sui toni gia' appiattiti; e non dentro gli occhi, che sono
+       scuri e sono la parte che regge la somiglianza. */
+    float macchia = smoothstep(m * 0.58, m * 0.30, lVera) * 0.78;
+    if (u_hasFace > 0.5) {
+      float dOcc = max(length((u_eyeR - u_eyeL) * vec2(u_aspect, 1.0)), 0.001);
+      float dist = min(length((uv - u_eyeL) * vec2(u_aspect, 1.0)),
+                       length((uv - u_eyeR) * vec2(u_aspect, 1.0)));
+      macchia *= 1.0 - 0.80 * smoothstep(dOcc * 0.60, dOcc * 0.25, dist);
+    }
+    ink = clamp(max(ink, macchia), 0.0, 1.0);
+
+    c = mix(c, vec3(0.05, 0.045, 0.07), ink);
+    gl_FragColor = finish(c, uv);
   }`,
 
   /* ------- Anime: cel shading, colori saturi, luce soffusa ------- */
   anime: `
   void main(){
+    vec2 uv = warp(v_uv);
     float a = u_amount;
-    vec3 hsv = rgb2hsv(flatten(v_uv, 0.8 + a * 1.4, 6.0 + a * 4.0));
+    vec3 hsv = rgb2hsv(flatten(uv, 0.8 + a * 1.4, 6.0 + a * 4.0));
     float bands = mix(9.0, 4.0, a);
     float v = floor(hsv.z * bands + 0.5) / bands;
     hsv.z = clamp(mix(hsv.z, v, 0.2 + a * 0.8) * 1.12 + 0.05, 0.0, 1.0);
     hsv.y = clamp(hsv.y * (1.0 + a * 0.7 * smoothstep(0.05, 0.28, hsv.y)), 0.0, 1.0);
     vec3 c = hsv2rgb(hsv);
 
-    c += max(bsSoft(v_uv, 3.0) - 0.70, 0.0) * 1.1 * a;       // luce soffusa
+    c += max(bsSoft(uv, 3.0) - 0.70, 0.0) * 1.1 * a;
     float sh = smoothstep(0.35, 0.0, lum(c));
-    c = mix(c, c * vec3(0.90, 0.94, 1.10), sh * 0.35 * a);   // ombre appena freddine
-    c += relief(v_uv) * (0.5 - a * 0.15);
+    c = mix(c, c * vec3(0.90, 0.94, 1.10), sh * 0.35 * a);
+    c += relief(uv) * (0.5 - a * 0.15);
 
-    float e = edgeMid(v_uv, 0.9);
+    float e = edgeMid(uv, 0.9);
     float edge = smoothstep(mix(0.62, 0.22, a), mix(0.92, 0.52, a), e);
     c = mix(c, vec3(0.15, 0.10, 0.19), edge * 0.94);
-    gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+    gl_FragColor = finish(c, uv);
   }`,
 
   /* ------- Matita: grafite su carta ------- */
   matita: `
   void main(){
+    vec2 uv = warp(v_uv);
     float a = u_amount;
-    float g = lum(fixTone(tx(v_uv)));
-    float b = lum(fixTone(bsSoft(v_uv, 0.7 + a * 1.6)));
+    float g = lum(fixTone(tx(uv)));
+    float b = lum(fixTone(bsSoft(uv, 0.7 + a * 1.6)));
     float dodge = clamp(g / max(b, 0.004), 0.0, 1.0);
     float ink = pow(1.0 - dodge, mix(1.25, 0.5, a)) * mix(1.3, 2.6, a);
-    ink += smoothstep(0.18, 0.68, edgeMid(v_uv, 1.1)) * mix(0.35, 0.9, a);
+    ink += smoothstep(0.18, 0.68, edgeMid(uv, 1.1)) * mix(0.35, 0.9, a);
 
-    vec2 px = v_uv / (u_midTexel * u_scale);                 // pixel del livello contorni
-    float shade = smoothstep(0.42, 0.04, lum(md(v_uv))) * 0.55 * a;
+    vec2 px = uv / (u_midTexel * u_scale);
+    float shade = smoothstep(0.42, 0.04, lum(md(uv))) * 0.55 * a;
     float hatch = smoothstep(0.30, 0.70, abs(fract((px.x + px.y) / 7.0) - 0.5) * 2.0);
-    ink += shade * mix(mix(0.45, 1.0, hatch), 0.8, u_clean); // niente tratteggio in modo pulito
+    ink += shade * mix(mix(0.45, 1.0, hatch), 0.8, u_clean);
     ink = clamp(ink, 0.0, 1.0);
 
     float grain = hash(floor(px / 2.0)) * 0.07 * (1.0 - u_clean);
@@ -237,69 +422,73 @@ const FRAG = {
     gl_FragColor = vec4(mix(paper, lead, ink), 1.0);
   }`,
 
-  /* ------- Fumetto: retino a mezzatinta + inchiostro ------- */
+  /* ------- Retino: mezzatinta alla vecchia maniera ------- */
   fumetto: `
   void main(){
+    vec2 uv = warp(v_uv);
     float a = u_amount;
-    vec3 base = flatten(v_uv, 0.5, 4.0);
+    vec3 base = flatten(uv, 0.5, 4.0);
     float g = clamp(pow(lum(base), 0.70) * 1.35, 0.0, 1.0);
 
     float cell = mix(12.0, 8.0, a) * u_scale;
-    vec2 px = v_uv / u_midTexel * u_scale;
+    vec2 px = uv / u_midTexel * u_scale;
     float ang = 0.7853981;
     vec2 q = mat2(cos(ang), -sin(ang), sin(ang), cos(ang)) * px / cell;
     vec2 f = fract(q) - 0.5;
     float radius = sqrt(clamp(1.0 - g, 0.0, 1.0)) * 0.52;
     float dots = 1.0 - smoothstep(radius - 0.10, radius + 0.10, length(f));
-    dots *= 1.0 - u_clean;                                   // in modo pulito: campiture piatte
+    dots *= 1.0 - u_clean;
 
-    float edge = smoothstep(0.22, 0.58, edgeMid(v_uv, 1.2));
+    float edge = smoothstep(0.22, 0.58, edgeMid(uv, 1.2));
     float ink = clamp(max(dots, edge), 0.0, 1.0);
 
     vec3 flatc = clamp(satBoost(quantize(base, 4.0), 0.8) * 1.10 + 0.04, 0.0, 1.0);
-    flatc += relief(v_uv) * 0.35 * u_clean;
+    flatc += relief(uv) * 0.35 * u_clean;
     vec3 paper = mix(flatc, vec3(1.0, 0.99, 0.96), a * 0.45 * (1.0 - u_clean * 0.6));
-    gl_FragColor = vec4(clamp(mix(paper, vec3(0.07, 0.06, 0.09), ink), 0.0, 1.0), 1.0);
+    gl_FragColor = finish(mix(paper, vec3(0.07, 0.06, 0.09), ink), uv);
   }`,
 
-  /* ------- Acquerello: macchie morbide, bordi umidi ------- */
+  /* ------- Acquerello ------- */
   acquerello: `
   void main(){
+    vec2 uv = warp(v_uv);
     float a = u_amount;
-    vec3 c = flatten(v_uv, 1.0 + a * 1.5, 3.0 + a * 2.0);
+    vec3 c = flatten(uv, 1.0 + a * 1.5, 3.0 + a * 2.0);
     c = quantize(c, mix(16.0, 8.0, a));
     c = satBoost(c, 0.65 * a);
     c = clamp(c * 1.08 + 0.05, 0.0, 1.0);
-    c += relief(v_uv) * 0.35;
+    c += relief(uv) * 0.35;
 
-    float edge = smoothstep(0.22, 0.85, edgeMid(v_uv, 1.3));
-    c *= 1.0 - edge * 0.55 * a;                              // bordo bagnato
-    vec2 px = v_uv / u_midTexel * u_scale;
+    float edge = smoothstep(0.22, 0.85, edgeMid(uv, 1.3));
+    c *= 1.0 - edge * 0.55 * a;
+    vec2 px = uv / u_midTexel * u_scale;
     c += (hash(floor(px / 3.0)) - 0.5) * 0.10 * a * (1.0 - u_clean);
-    float vg = smoothstep(1.15, 0.35, length(v_uv - 0.5) * 1.4);
+    float vg = smoothstep(1.15, 0.35, length(uv - 0.5) * 1.4);
     c = mix(vec3(0.99, 0.98, 0.95), c, mix(1.0, vg, 0.55 * a * (1.0 - u_clean)));
-    gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+    gl_FragColor = finish(c, uv);
   }`,
 
-  /* ------- Neon: solo contorni luminosi ------- */
+  /* ------- Neon ------- */
   neon: `
   void main(){
+    vec2 uv = warp(v_uv);
     float a = u_amount;
-    float g    = smoothstep(0.15, 0.90, edgeMid(v_uv, 1.0 + a * 1.5));
-    float glow = smoothstep(0.05, 0.80, edgeMid(v_uv, 3.0 + a * 4.0)) * 0.65;
-    float hue  = fract(v_uv.y * 0.6 + v_uv.x * 0.2 + u_time * 0.06);
+    float g    = smoothstep(0.15, 0.90, edgeMid(uv, 1.0 + a * 1.5));
+    float glow = smoothstep(0.05, 0.80, edgeMid(uv, 3.0 + a * 4.0)) * 0.65;
+    float hue  = fract(uv.y * 0.6 + uv.x * 0.2 + u_time * 0.06);
     vec3 neon  = hsv2rgb(vec3(hue, 0.85, 1.0));
-    vec3 dark  = md(v_uv) * mix(0.40, 0.06, a);
+    vec3 dark  = md(uv) * mix(0.40, 0.06, a);
     gl_FragColor = vec4(clamp(dark + neon * (g * 1.3 + glow * 0.7), 0.0, 1.0), 1.0);
   }`,
 };
 
 const EFFECTS = [
   { id: 'ritratto',   name: 'Ritratto',   emoji: '🪪', ref: 'identita' },
+  { id: 'inchiostro', name: 'Fumetto',    emoji: '💥', ref: 'ottimo'  },
   { id: 'cartoon',    name: 'Cartoon',    emoji: '🎨', ref: 'ottimo'  },
   { id: 'anime',      name: 'Anime',      emoji: '✨', ref: 'ottimo'  },
   { id: 'matita',     name: 'Matita',     emoji: '✏️', ref: 'buono'   },
-  { id: 'fumetto',    name: 'Fumetto',    emoji: '💥', ref: 'buono'   },
+  { id: 'fumetto',    name: 'Retino',     emoji: '🔘', ref: 'medio'   },
   { id: 'acquerello', name: 'Acquerello', emoji: '🖌️', ref: 'medio'   },
   { id: 'neon',       name: 'Neon',       emoji: '🌈', ref: 'scarso'  },
 ];
@@ -417,7 +606,10 @@ class Renderer {
     this.texDetail = this.makeTexture();
     this.texMid    = this.makeTexture();
     this.texBase   = this.makeTexture();
-    this.sizes = { detail: [1, 1], mid: [1, 1], base: [1, 1] };
+    this.texMask   = this.makeTexture();
+    this.sizes = { detail: [1, 1], mid: [1, 1], base: [1, 1], mask: [1, 1] };
+    this.hasMask = false;
+    this.face = null;
   }
 
   makeTexture() {
@@ -428,6 +620,10 @@ class Renderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    // un pixel bianco: campionare una texture mai caricata da risultati
+    // indefiniti, e la maschera puo' non esserci
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, 1, 1, 0, gl.RGB, gl.UNSIGNED_BYTE,
+                  new Uint8Array([255, 255, 255]));
     return t;
   }
 
@@ -455,6 +651,10 @@ class Renderer {
       u_midTexel: u('u_midTexel'), u_baseTexel: u('u_baseTexel'),
       u_scale: u('u_scale'), u_amount: u('u_amount'), u_clean: u('u_clean'),
       u_avg: u('u_avg'), u_time: u('u_time'), u_flip: u('u_flip'),
+      u_mask: u('u_mask'), u_hasMask: u('u_hasMask'), u_bgFlat: u('u_bgFlat'), u_bg: u('u_bg'),
+      u_hasFace: u('u_hasFace'), u_car: u('u_car'), u_aspect: u('u_aspect'),
+      u_eyeL: u('u_eyeL'), u_eyeR: u('u_eyeR'), u_brow: u('u_brow'),
+      u_chin: u('u_chin'), u_eyeRad: u('u_eyeRad'),
     };
     return this.programs[id];
   }
@@ -496,6 +696,16 @@ class Renderer {
     this.avg = averageColor(base);
   }
 
+  /* Maschera persona/sfondo. Passare null la disattiva. */
+  setMask(cv) {
+    if (!cv) { this.hasMask = false; return; }
+    this.put(this.texMask, cv, cv.width, cv.height, 'mask');
+    this.hasMask = true;
+  }
+
+  /* Misure del volto per la caricatura. */
+  setFace(m) { this.face = m || null; }
+
   draw(effectId, o) {
     const gl = this.gl;
     const s = this.program(effectId);
@@ -509,6 +719,7 @@ class Renderer {
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.texDetail); gl.uniform1i(s.u_tex, 0);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.texMid);    gl.uniform1i(s.u_mid, 1);
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.texBase);   gl.uniform1i(s.u_base, 2);
+    gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.texMask);   gl.uniform1i(s.u_mask, 3);
 
     gl.uniform2f(s.u_midTexel,  1 / this.sizes.mid[0],  1 / this.sizes.mid[1]);
     gl.uniform2f(s.u_baseTexel, 1 / this.sizes.base[0], 1 / this.sizes.base[1]);
@@ -519,12 +730,35 @@ class Renderer {
     gl.uniform3f(s.u_avg, avg[0], avg[1], avg[2]);
     gl.uniform1f(s.u_time,   o.time || 0);
     gl.uniform1f(s.u_flip,   o.flip ? 1 : 0);
+
+    const bg = o.bg || [0.88, 0.88, 0.90];
+    // la maschera serve al contorno del personaggio anche quando lo
+    // sfondo non viene sostituito: sono due cose distinte
+    gl.uniform1f(s.u_hasMask, this.hasMask ? 1 : 0);
+    gl.uniform1f(s.u_bgFlat, (this.hasMask && o.useMask) ? 1 : 0);
+    gl.uniform3f(s.u_bg, bg[0], bg[1], bg[2]);
+
+    const f = (o.car > 0.01) ? this.face : null;
+    gl.uniform1f(s.u_hasFace, f ? 1 : 0);
+    gl.uniform1f(s.u_car, o.car || 0);
+    gl.uniform1f(s.u_aspect, w / h);
+    if (f) {
+      gl.uniform2f(s.u_eyeL, f.occhioSx.x, f.occhioSx.y);
+      gl.uniform2f(s.u_eyeR, f.occhioDx.x, f.occhioDx.y);
+      gl.uniform2f(s.u_brow, f.fronte.x, f.fronte.y + f.altezzaVolto * 0.18);
+      gl.uniform2f(s.u_chin, f.mento.x, f.mento.y);
+      gl.uniform1f(s.u_eyeRad, f.raggioOcchio);
+    } else {
+      gl.uniform2f(s.u_eyeL, 0.5, 0.5); gl.uniform2f(s.u_eyeR, 0.5, 0.5);
+      gl.uniform2f(s.u_brow, 0.5, 0.5); gl.uniform2f(s.u_chin, 0.5, 0.9);
+      gl.uniform1f(s.u_eyeRad, 0.05);
+    }
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
   dispose() {
     const gl = this.gl;
-    [this.texDetail, this.texMid, this.texBase].forEach((t) => gl.deleteTexture(t));
+    [this.texDetail, this.texMid, this.texBase, this.texMask].forEach((t) => gl.deleteTexture(t));
     Object.values(this.programs).forEach((s) => gl.deleteProgram(s.p));
     this.programs = {};
     const ext = gl.getExtension('WEBGL_lose_context');

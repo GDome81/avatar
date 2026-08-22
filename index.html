@@ -71,9 +71,23 @@
       </label>
     </div>
 
+    <div class="extra-row only-photo">
+      <button id="btnBg" class="toggle" type="button" aria-pressed="false">
+        <span class="em">◻️</span>Fondo neutro
+      </button>
+      <button id="btnCar" class="toggle" type="button" aria-pressed="false">
+        <span class="em">🙂</span>Caricatura
+      </button>
+    </div>
+
     <div class="slider-row">
       <span class="slider-label">Intensità</span>
       <input id="amount" type="range" min="0" max="100" value="70" aria-label="Intensità effetto">
+    </div>
+
+    <div class="slider-row only-photo hidden" id="carRow">
+      <span class="slider-label">Caricatura</span>
+      <input id="carAmount" type="range" min="0" max="100" value="50" aria-label="Intensità caricatura">
     </div>
 
     <div id="effects" class="effects"></div>
@@ -125,6 +139,7 @@
 <input id="fileShot" type="file" accept="image/jpeg,image/png" capture="environment" hidden>
 
 <script src="engine.js"></script>
+<script src="face.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

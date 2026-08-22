@@ -255,3 +255,8 @@ input[type=range]::-moz-range-thumb{width:24px; height:24px; border:0; border-ra
   .result-card{ width:min(46vw, 340px) }
 }
 .preview-actions{ padding-bottom:6px }
+
+/* ---------- riga extra (fondo, caricatura) ---------- */
+.extra-row{display:flex; align-items:center; justify-content:center; gap:10px; padding:0 16px; flex-wrap:wrap}
+#stage:not(.photo-mode) .extra-row{display:none}
+.slider-row.hidden{display:none}

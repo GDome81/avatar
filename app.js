@@ -33,11 +33,15 @@ let renderer = null, stream = null, track = null, raf = 0;
 let mode = 'fotocamera';
 let photo = null;
 let facing = store.get('facing', 'user');
-let effect = FRAG[store.get('effect', '')] ? store.get('effect', 'cartoon') : 'cartoon';
+let effect = FRAG[store.get('effect', '')] ? store.get('effect', 'inchiostro') : 'inchiostro';
 let lastStyle = effect === 'ritratto' ? 'cartoon' : effect;
 let amount = Number(store.get('amount', 70)) / 100;
 let clean = store.get('clean', '1') === '1';
-let pairOn = store.get('pair', '1') === '1';
+let pairOn = store.get('pair', '0') === '1';
+let bgOn = store.get('bg', '0') === '1';
+let carOn = store.get('car', '0') === '1';
+let car = Number(store.get('carAmt', 50)) / 100;
+let analisi = null;                   // volto e maschera dell'anteprima
 let frozen = false, hasFrame = false, startTime = 0, quality = 1;
 let recorder = null, recChunks = [], recTimer = 0, recStart = 0;
 let results = [];
@@ -198,6 +202,7 @@ function loop() {
   renderer.draw(effect, {
     width: canvas.width, height: canvas.height, amount, clean,
     time: (performance.now() - startTime) / 1000, flip: facing === 'user',
+    useMask: false, car: 0,          // dal vivo servirebbe il rilevamento a ogni frame
   });
 
   frames++;
@@ -249,10 +254,14 @@ async function loadPhoto(file) {
   stopStream();
   if (!ensureRenderer()) return;
   setMode('foto');
+  analisi = null;
+  renderer.setFace(null);
+  renderer.setMask(null);
   resetCrop();
   crop.on = true; syncCrop();
   drawPhoto();
   showToast(`Foto ${photo.w}×${photo.h}. Sposta il riquadro su una sola persona.`, 4600);
+  if (bgOn || carOn) { if (await preparaVolto()) await analizzaAnteprima(); }
 }
 
 function loadViaImg(file) {
@@ -271,11 +280,80 @@ function drawPhoto() {
   const w = Math.max(2, Math.round(photo.w * k)), h = Math.max(2, Math.round(photo.h * k));
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   renderer.load(photo.source, photo.w, photo.h, { outSide: Math.max(w, h) });
-  renderer.draw(effect, { width: w, height: h, amount, clean, time: 3, flip: false });
+  renderer.draw(effect, Object.assign({ width: w, height: h, amount, clean, time: 3, flip: false }, extra()));
   drawOverlay();
 }
 
 function redrawIfPhoto() { if (mode === 'foto') drawPhoto(); }
+
+/* Opzioni che valgono sia per l'anteprima sia per l'esportazione. */
+function extra() {
+  return { useMask: bgOn, bg: [0.88, 0.88, 0.90], car: carOn ? car : 0 };
+}
+
+/* ---------------------------------------------------------
+   Rilevamento del volto e dello sfondo
+
+   Gira in locale: i modelli sono serviti dal sito stesso e pesano
+   circa 16 MB, quindi si caricano solo quando servono davvero.
+   --------------------------------------------------------- */
+
+async function preparaVolto() {
+  if (Face.stato === 'pronto') return true;
+  showToast('Carico il rilevatore del volto: 16 MB, solo la prima volta…', 8000);
+  const ok = await Face.prepara();
+  if (!ok) showToast('Rilevatore non disponibile su questo browser' + (Face.errore ? ': ' + Face.errore : ''), 5000);
+  return ok;
+}
+
+/* Analisi per l'ANTEPRIMA: sull'immagine intera, che e' quella
+   mostrata. Il ritaglio viene analizzato a parte al momento
+   dell'esportazione, perche' i punti sono in coordinate normalizzate
+   e cambiano con l'inquadratura. */
+async function analizzaAnteprima() {
+  if (!photo || Face.stato !== 'pronto') return;
+  const piccolo = downscale(photo.source, photo.w, photo.h, 512);
+  const r = await Face.analizza(piccolo, piccolo.width, piccolo.height);
+  analisi = r;
+  renderer.setFace(r.volto);
+  renderer.setMask(r.maschera);
+  if (!r.volto && carOn) showToast('Non trovo un volto: la caricatura resta spenta', 3600);
+  drawPhoto();
+}
+
+const bgBtn = $('#btnBg'), carBtn = $('#btnCar'), carRow = $('#carRow'), carInput = $('#carAmount');
+
+function syncExtra() {
+  bgBtn.setAttribute('aria-pressed', String(bgOn));
+  carBtn.setAttribute('aria-pressed', String(carOn));
+  carRow.classList.toggle('hidden', !carOn);
+}
+
+bgBtn.addEventListener('click', async () => {
+  if (mode !== 'foto') return showToast('Funziona sulle foto, non sull’anteprima dal vivo', 3000);
+  bgOn = !bgOn;
+  store.set('bg', bgOn ? '1' : '0');
+  syncExtra();
+  if (bgOn && !(await preparaVolto())) { bgOn = false; syncExtra(); return; }
+  if (bgOn && !analisi) await analizzaAnteprima(); else drawPhoto();
+});
+
+carBtn.addEventListener('click', async () => {
+  if (mode !== 'foto') return showToast('Funziona sulle foto, non sull’anteprima dal vivo', 3000);
+  carOn = !carOn;
+  store.set('car', carOn ? '1' : '0');
+  syncExtra();
+  if (carOn && !(await preparaVolto())) { carOn = false; syncExtra(); return; }
+  if (carOn && !analisi) await analizzaAnteprima(); else drawPhoto();
+});
+
+carInput.value = String(Math.round(car * 100));
+carInput.addEventListener('input', () => {
+  car = Number(carInput.value) / 100;
+  store.set('carAmt', carInput.value);
+  redrawIfPhoto();
+});
+syncExtra();
 
 /* ---------------------------------------------------------
    Ritaglio guidato
@@ -475,7 +553,7 @@ function drawCrop(src, rect, w, h) {
   return cv;
 }
 
-function renderFull(source, w, h, opts) {
+function renderFull(source, w, h, opts, volto, maschera) {
   const cap = renderer ? renderer.maxTexture : 4096;
   let ow = w, oh = h;
   const k = Math.min(1, cap / Math.max(w, h));
@@ -486,7 +564,11 @@ function renderFull(source, w, h, opts) {
   out.width = ow; out.height = oh;
   const r = new Renderer(out);
   r.load(source, w, h, { outSide: Math.max(ow, oh) });
-  r.draw(opts.effect, { width: ow, height: oh, amount: opts.amount, clean: opts.clean, time: 3, flip: opts.flip });
+  r.setFace(volto || null);
+  r.setMask(maschera || null);
+  r.draw(opts.effect, Object.assign({
+    width: ow, height: oh, amount: opts.amount, clean: opts.clean, time: 3, flip: opts.flip,
+  }, extra()));
   if (r.uploadError) showToast('Questo telefono non regge questa risoluzione: prova 1024 px', 4200);
   // il contesto va liberato SOLO dopo la lettura del canvas: perderlo
   // svuota il drawing buffer e il file uscirebbe vuoto
@@ -497,8 +579,8 @@ function toBlob(cv, type, q) {
   return new Promise((res) => cv.toBlob((b) => res(b), type, q));
 }
 
-async function exportOne(effectId, source, w, h, flip) {
-  const job = renderFull(source, w, h, { effect: effectId, amount, clean, flip });
+async function exportOne(effectId, source, w, h, flip, volto, maschera) {
+  const job = renderFull(source, w, h, { effect: effectId, amount, clean, flip }, volto, maschera);
   const long = Math.max(job.canvas.width, job.canvas.height);
   // PNG fino a 2048 px (nessun artefatto sui tratti fini); oltre, JPEG,
   // perche' un PNG da 12 Mpx supera i 40 MB e su iOS non si codifica.
@@ -511,10 +593,10 @@ async function exportOne(effectId, source, w, h, flip) {
   const kind = effectId === 'ritratto' ? 'identita' : 'stile';
   return {
     blob, size, kind,
-    label: effectId === 'ritratto' ? 'Identità' : `Stile — ${meta.name}`,
+    label: effectId === 'ritratto' ? 'Ritratto (foto vera)' : `Personaggio — ${meta.name}`,
     note: effectId === 'ritratto'
-      ? 'Va nello slot immagine di riferimento dell’AI.'
-      : 'Serve come riferimento del look, non dell’identità.',
+      ? 'È la foto reale, solo bonificata. Dalla all’AI soltanto se ti sta bene che la riceva.'
+      : 'È il disegno del personaggio: questo è il file da dare all’AI se non vuoi passare la foto.',
     name: `personaggio-${kind}-${effectId}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.${blob.type.indexOf('png') >= 0 ? 'png' : 'jpg'}`,
     tipo: blob.type, peso: Math.round(blob.size / 1024),
   };
@@ -540,9 +622,18 @@ async function shoot() {
     ? ['ritratto', effect === 'ritratto' ? lastStyle : effect]
     : [effect];
 
+  // Il ritaglio va analizzato a parte: i punti del volto e la maschera
+  // sono in coordinate normalizzate sull'inquadratura.
+  let volto = null, maschera = null;
+  if ((bgOn || carOn) && Face.stato === 'pronto') {
+    const a = await Face.analizza(fitted, fitted.width, fitted.height);
+    volto = a.volto; maschera = a.maschera;
+    if (!volto && carOn) showToast('Nel ritaglio non trovo il volto: esporto senza caricatura', 3600);
+  }
+
   const out = [];
   for (const id of list) {
-    const r = await exportOne(id, fitted, fitted.width, fitted.height, flip);
+    const r = await exportOne(id, fitted, fitted.width, fitted.height, flip, volto, maschera);
     if (r) out.push(r);
   }
   fitted.width = fitted.height = 0;
@@ -587,7 +678,7 @@ function showResults(list) {
   });
 
   $('#saveHint').textContent = results.length > 1
-    ? 'Dai all’AI la prima come immagine di riferimento e usa la seconda solo per indicare il look.'
+    ? 'La foto reale resta un’opzione tua: per l’AI basta il disegno più il testo.'
     : 'Su iPhone puoi anche tenere premuto sull’immagine per salvarla in Foto.';
   preview.classList.remove('hidden');
 }
@@ -615,6 +706,7 @@ $('#btnClose').addEventListener('click', () => preview.classList.add('hidden'));
    --------------------------------------------------------- */
 
 const STYLE_WORDS = {
+  inchiostro: 'comic book character design, clean black ink lineart, flat colours, three-tone cel shading',
   cartoon:    'flat colour cartoon illustration, bold clean outlines, simple shapes, cel shading',
   anime:      'modern anime illustration, cel shading, clean lineart, soft rim light, expressive eyes',
   matita:     'graphite pencil drawing, visible hatching, warm white paper, monochrome',
@@ -626,54 +718,70 @@ const STYLE_WORDS = {
 
 function buildPrompt() {
   const styleId = effect === 'ritratto' ? lastStyle : effect;
-  const words = STYLE_WORDS[styleId] || STYLE_WORDS.cartoon;
-  return `COME USARE I DUE FILE
-• personaggio-identita…  -> slot dell'immagine di riferimento (identità).
-    Midjourney V7:  --oref <immagine> --ow 25-50  (peso basso: stai cambiando stile)
-    Gemini / Nano Banana:  allegala come reference del personaggio
-    GPT-image:  input_fidelity="high"
-• personaggio-stile…  -> NON va nello slot identità. Usalo come riferimento
-    di stile separato (Midjourney: --sref) oppure descrivi lo stile a parole
-    con il prompt qui sotto.
+  const words = STYLE_WORDS[styleId] || STYLE_WORDS.inchiostro;
+  const conCar = carOn ? '\n• La caricatura è già applicata nel disegno: non chiedere al modello di esagerare\n  ulteriormente i tratti, o il personaggio diventa una macchietta.' : '';
+  return `SENZA DARE LA FOTO VERA
 
-PRIMA DI PARTIRE, CONTROLLA IL FILE IDENTITÀ
-• una sola persona nel fotogramma
-• occhi visibili e nitidi (gli occhiali da sole tolgono la regione con più
-  informazione sull'identità: se puoi, usa una foto senza)
-• volto sul 40-60% del fotogramma, con un margine sopra la fronte
-• luce frontale morbida: un controluce lascia il viso in ombra e il bordo
-  luminoso viene letto come un tratto del personaggio
+Questa immagine è già il DISEGNO del personaggio, non una fotografia. È il
+percorso giusto anche tecnicamente: Midjourney dichiara che il riferimento
+di personaggio "eccelle con immagini generate" e non è ottimizzato per le
+foto reali, perché questi meccanismi sono tarati su input che stanno già nel
+dominio dell'illustrazione.
+
+Quello che il disegno ha perso — il colore vero di occhi, capelli e
+incarnato, l'età, la corporatura — lo dichiari a parole qui sotto.${conCar}
+
+COME CARICARLA
+• Midjourney V7:  --oref <immagine> --ow 150-300
+    (peso alto: il riferimento è già nello stile giusto, quindi conviene
+     fedeltà alta, al contrario di quando si parte da una foto)
+    --cw 100 se capelli e vestiario fanno parte del personaggio, --cw 0 se
+    vuoi poterli cambiare
+• Gemini / Nano Banana:  allegala come reference del personaggio
+• GPT-image:  input_fidelity="high"
 
 PROMPT (in inglese: è la lingua in cui questi modelli rendono meglio)
 
-Create a character design for a children's picture book and comic, based on
-the reference photo of the person.
+Use the attached image as the canonical character design. Redraw and refine it
+in a consistent style for a children's picture book and comic, keeping the same
+face structure, proportions and distinctive features.
 
-STYLE: ${words}. Plain light grey background, soft frontal lighting.
+STYLE: ${words}. Plain light grey background, soft frontal lighting, flat
+colours, clean lineart.
 
 CHARACTER BIBLE — reuse these exact tokens in every future prompt:
 - age: [età]
 - face shape: [forma del viso]
-- hair: [colore e taglio]
-- eyes: [colore]
-- skin tone: [incarnato]
+- hair: [colore e taglio reali]
+- eyes: [colore reale]
+- skin tone: [incarnato reale]
 - build: [corporatura]
 - distinctive features: [2-3 tratti riconoscibili]
 - outfit palette: [colori dell'abito]
 
-Keep the exact same face, hairstyle and distinctive features. This must read
-as the exact same person.
+This is the same character in every image. Do not restyle the face.
 
 NEGATIVE: no halftone, no Ben-Day dots, no paper grain, no newsprint texture,
 no vignette, no film grain, no posterization banding, no watermark, no text.
 
-E POI, IL PASSAGGIO CHE FA LA DIFFERENZA
-Genera UN SOLO design del personaggio e iteralo finché non ti convince: da
-quel momento usa come riferimento QUELLO, mai più la foto reale. È così che
-il personaggio resta lo stesso per tutte le tavole del libro.
+DUE AVVERTENZE ONESTE
+1. Un disegno derivato da una foto porta con sé i limiti di quella foto. Se il
+   viso era in ombra o di tre quarti, il modello inventerà la parte che non
+   vede, e la inventerà diversa ogni volta. Conviene partire da un disegno
+   frontale, con gli occhi ben visibili.
+2. Gli artefatti dello stile locale (contorni spessi, campiture piatte)
+   vengono ereditati e a volte amplificati. Per questo l'interruttore
+   "Pulito per l'AI" spegne grana, retino e vignettatura: sono le texture che
+   un modello copia come materia del personaggio.
 
-Se la persona ritratta non sei tu, chiedile il consenso prima di pubblicare
-un personaggio che le somiglia.`;
+E POI, IL PASSAGGIO CHE FA LA DIFFERENZA
+Fatti generare UN SOLO personaggio e iteralo finché non convince. Da quel
+momento il riferimento è quel disegno approvato: è così che resta lo stesso
+per tutte le tavole del libro.
+
+Se la persona ritratta non sei tu, chiedile il consenso prima di pubblicare un
+personaggio che le somiglia: una caricatura riconoscibile resta una
+somiglianza, anche se non è più una fotografia.`;
 }
 
 $('#btnText').addEventListener('click', () => {
