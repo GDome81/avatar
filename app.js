@@ -84,6 +84,24 @@ vec3 hsv2rgb(vec3 c){
   vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
   return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
 }
+
+/* Satura solo cio' che ha gia' un colore: bianchi e grigi restano neutri,
+   altrimenti una camicia bianca con un filo di azzurro diventa viola. */
+vec3 satBoost(vec3 c, float k){
+  vec3 hsv = rgb2hsv(c);
+  hsv.y = clamp(hsv.y * (1.0 + k * smoothstep(0.05, 0.28, hsv.y)), 0.0, 1.0);
+  return hsv2rgb(hsv);
+}
+
+/* Riduce i toni a pochi livelli lavorando su luminosita' e saturazione:
+   quantizzare in RGB sposterebbe le tinte. */
+vec3 quantize(vec3 c, float levels){
+  vec3 hsv = rgb2hsv(c);
+  hsv.z = floor(hsv.z * levels + 0.5) / levels;
+  float sl = max(levels * 0.8, 3.0);
+  hsv.y = floor(hsv.y * sl + 0.5) / sl;
+  return hsv2rgb(hsv);
+}
 `;
 
 const FRAG = {
@@ -93,11 +111,9 @@ const FRAG = {
   void main(){
     float a = u_amount;
     vec3 base = smooth13(v_uv, 1.6 + a * 2.6);
-    vec3 c = posterize(base, mix(12.0, 4.0, a));
-    vec3 hsv = rgb2hsv(c);
-    hsv.y = clamp(hsv.y * (1.0 + a * 0.55), 0.0, 1.0);
-    hsv.z = clamp(hsv.z * 1.05, 0.0, 1.0);
-    c = hsv2rgb(hsv);
+    vec3 c = quantize(base, mix(14.0, 6.0, a));
+    c = satBoost(c, a * 0.7);
+    c = clamp(c * 1.06 + 0.02, 0.0, 1.0);
     float e = sobel(v_uv, 1.0 + a);
     float edge = smoothstep(mix(0.60, 0.16, a), mix(0.90, 0.44, a), e);
     c = mix(c, vec3(0.06, 0.05, 0.09), edge);
@@ -110,39 +126,43 @@ const FRAG = {
     float a = u_amount;
     vec3 base = smooth13(v_uv, 2.0 + a * 3.2);
     vec3 hsv = rgb2hsv(base);
-    float bands = mix(8.0, 3.0, a);
+    float bands = mix(9.0, 4.0, a);
     float v = floor(hsv.z * bands + 0.5) / bands;
-    hsv.z = clamp(mix(hsv.z, v, 0.15 + a * 0.85) * 1.07, 0.0, 1.0);
-    hsv.y = clamp(hsv.y * (1.0 + a * 0.9) + 0.04 * a, 0.0, 1.0);
+    hsv.z = clamp(mix(hsv.z, v, 0.2 + a * 0.8) * 1.12 + 0.05, 0.0, 1.0);   // volti luminosi
+    hsv.y = clamp(hsv.y * (1.0 + a * 0.7 * smoothstep(0.05, 0.28, hsv.y)), 0.0, 1.0);
     vec3 c = hsv2rgb(hsv);
 
     vec3 bl = blur3(v_uv, 6.0);
-    c += max(bl - 0.72, 0.0) * 1.2 * a;                       // bloom sulle luci
-    c *= mix(vec3(1.0), vec3(1.06, 0.99, 0.97), 0.7);          // incarnato caldo
-    float sh = smoothstep(0.45, 0.0, lum(c));
-    c = mix(c, c * vec3(0.85, 0.90, 1.14), sh * 0.55 * a);     // ombre freddine
+    c += max(bl - 0.70, 0.0) * 1.1 * a;                        // bloom sulle luci
+    float sh = smoothstep(0.35, 0.0, lum(c));
+    c = mix(c, c * vec3(0.90, 0.94, 1.10), sh * 0.35 * a);      // ombre appena freddine
 
     float e = sobel(v_uv, 0.9);
     float edge = smoothstep(mix(0.62, 0.22, a), mix(0.92, 0.52, a), e);
-    c = mix(c, vec3(0.13, 0.09, 0.17), edge * 0.94);
+    c = mix(c, vec3(0.15, 0.10, 0.19), edge * 0.94);
     gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
   }`,
 
-  /* ------- Matita: schizzo a grafite su carta ------- */
+  /* ------- Matita: schizzo a grafite su carta, con tratteggio nelle ombre ------- */
   matita: `
   void main(){
     float a = u_amount;
-    float g = lum(tx(v_uv));
+    vec3 src = tx(v_uv);
+    float g = lum(src);
     float b = lum(blur3(v_uv, 3.0 + a * 7.0));
-    float dodge = clamp(g / max(b, 0.004), 0.0, 1.0);          // color dodge
-    float ink = pow(1.0 - dodge, mix(1.5, 0.6, a)) * mix(0.85, 1.7, a);
-    ink += smoothstep(0.28, 0.80, sobel(v_uv, 1.2)) * a * 0.55;
-    ink = clamp(ink, 0.0, 1.0);
+    float dodge = clamp(g / max(b, 0.004), 0.0, 1.0);            // color dodge
+    float ink = pow(1.0 - dodge, mix(1.25, 0.5, a)) * mix(1.3, 2.6, a);
+    ink += smoothstep(0.18, 0.68, sobel(v_uv, 1.2)) * mix(0.35, 0.9, a);
 
     vec2 px = v_uv / u_texel;
+    float hatch = smoothstep(0.30, 0.70, abs(fract((px.x + px.y) / 7.0) - 0.5) * 2.0);
+    float shade = smoothstep(0.42, 0.04, g) * 0.55 * a;          // tratteggio nelle ombre
+    ink += shade * mix(0.45, 1.0, hatch);
+    ink = clamp(ink, 0.0, 1.0);
+
     float grain = hash(floor(px / 2.0)) * 0.07;
-    vec3 paper  = vec3(0.965, 0.950, 0.925) - grain;
-    vec3 lead   = vec3(0.13, 0.12, 0.15) + grain * 0.5;
+    vec3 paper = vec3(0.965, 0.950, 0.925) - grain;
+    vec3 lead  = vec3(0.11, 0.10, 0.13) + grain * 0.5;
     gl_FragColor = vec4(mix(paper, lead, ink), 1.0);
   }`,
 
@@ -151,22 +171,22 @@ const FRAG = {
   void main(){
     float a = u_amount;
     vec3 base = smooth13(v_uv, 2.0);
-    float g = clamp(pow(lum(base), 0.82) * 1.30, 0.0, 1.0);   // schiarisce i mezzi toni
+    float g = clamp(pow(lum(base), 0.70) * 1.35, 0.0, 1.0);      // schiarisce i mezzi toni
 
-    float cell = mix(9.0, 5.0, a);
+    float cell = mix(12.0, 8.0, a);
     vec2 p = v_uv / u_texel;
     float ang = 0.7853981;
     vec2 q = mat2(cos(ang), -sin(ang), sin(ang), cos(ang)) * p / cell;
     vec2 f = fract(q) - 0.5;
-    float radius = sqrt(clamp(1.0 - g, 0.0, 1.0)) * 0.48;
-    float dots = 1.0 - smoothstep(radius - 0.09, radius + 0.09, length(f));
+    float radius = sqrt(clamp(1.0 - g, 0.0, 1.0)) * 0.52;
+    float dots = 1.0 - smoothstep(radius - 0.10, radius + 0.10, length(f));
 
-    float edge = smoothstep(0.30, 0.72, sobel(v_uv, 1.1));
+    float edge = smoothstep(0.22, 0.58, sobel(v_uv, 1.2));       // inchiostro spesso
     float ink = clamp(max(dots, edge), 0.0, 1.0);
 
-    vec3 flatc = posterize(base, 3.0);
-    vec3 hsv = rgb2hsv(flatc); hsv.y = clamp(hsv.y * 1.5, 0.0, 1.0); flatc = hsv2rgb(hsv);
-    vec3 paper = mix(flatc, vec3(1.0, 0.99, 0.96), a * 0.85);
+    vec3 flatc = satBoost(quantize(base, 4.0), 0.8);
+    flatc = clamp(flatc * 1.10 + 0.04, 0.0, 1.0);
+    vec3 paper = mix(flatc, vec3(1.0, 0.99, 0.96), a * 0.45);
     gl_FragColor = vec4(mix(paper, vec3(0.07, 0.06, 0.09), ink), 1.0);
   }`,
 
@@ -175,16 +195,14 @@ const FRAG = {
   void main(){
     float a = u_amount;
     vec3 c = mix(smooth13(v_uv, 2.5 + a * 3.5), blur3(v_uv, 5.0 + a * 7.0), 0.35);
-    c = posterize(c, mix(14.0, 6.0, a));
-    vec3 hsv = rgb2hsv(c);
-    hsv.y = clamp(hsv.y * (1.0 + 0.55 * a), 0.0, 1.0);
-    hsv.z = clamp(hsv.z * 1.08 + 0.05, 0.0, 1.0);
-    c = hsv2rgb(hsv);
+    c = quantize(c, mix(16.0, 8.0, a));
+    c = satBoost(c, 0.65 * a);
+    c = clamp(c * 1.08 + 0.05, 0.0, 1.0);
 
     float edge = smoothstep(0.22, 0.85, sobel(v_uv, 1.3));
-    c *= 1.0 - edge * 0.55 * a;                                // contorno bagnato
+    c *= 1.0 - edge * 0.55 * a;                                  // contorno bagnato
     vec2 px = v_uv / u_texel;
-    c += (hash(floor(px / 3.0)) - 0.5) * 0.10 * a;              // grana carta
+    c += (hash(floor(px / 3.0)) - 0.5) * 0.10 * a;               // grana carta
     float vg = smoothstep(1.15, 0.35, length(v_uv - 0.5) * 1.4);
     c = mix(vec3(0.99, 0.98, 0.95), c, mix(1.0, vg, 0.55 * a));
     gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
