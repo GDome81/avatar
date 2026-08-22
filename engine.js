@@ -44,6 +44,7 @@ uniform vec2  u_baseTexel;     // 1.0 / dimensione del livello colore
 uniform float u_scale;         // lato lungo in uscita / 900: scala i pattern in pixel
 uniform float u_amount;        // 0..1 intensita'
 uniform float u_clean;         // 1.0 = senza grana/vignetta/retino (uso come reference)
+uniform vec3  u_avg;           // colore medio della scena: serve al bilanciamento del bianco
 uniform float u_time;
 
 vec2 cl(vec2 uv){ return clamp(uv, vec2(0.001), vec2(0.999)); }
@@ -84,7 +85,10 @@ float edgeMid(vec2 uv, float k){ return sobelAt(u_mid, uv, u_midTexel, k); }
 /* Microcontrasto: quanto il dettaglio si discosta dal livello
    contorni. Serve a non perdere occhi, denti e montature quando
    il colore viene appiattito. */
-float relief(vec2 uv){ return lum(tx(uv)) - lum(md(uv)); }
+/* Limitato in ampiezza: senza il clamp un bordo molto contrastato
+   (occhiali, denti, capelli sul cielo) genera un alone chiaro/scuro
+   che l'AI legge come un tratto del personaggio. */
+float relief(vec2 uv){ return clamp(lum(tx(uv)) - lum(md(uv)), -0.14, 0.14); }
 
 vec3 rgb2hsv(vec3 c){
   vec4 K = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
@@ -109,6 +113,30 @@ vec3 satBoost(vec3 c, float k){
   return hsv2rgb(hsv);
 }
 
+/* Bonifica tonale: la stessa correzione dell'effetto ritratto, ma a
+   forza fissa e moderata, applicata anche sotto gli stili. Un cartone
+   con la dominante arancione del controluce resta un cartone
+   arancione, e quella dominante finisce nel personaggio. */
+vec3 fixTone(vec3 c){
+  const float k = 0.75;
+  vec3 gain = clamp(vec3(lum(u_avg)) / max(u_avg, vec3(0.05)), vec3(0.78), vec3(1.30));
+  c *= mix(vec3(1.0), gain, k);
+  vec3 lifted = pow(clamp(c, 0.0, 1.0), vec3(1.0 / (1.0 + 0.55 * k)));
+  return clamp(mix(c, lifted, smoothstep(0.55, 0.04, lum(c))), 0.0, 1.0);
+}
+
+/* Campitura: tinta e saturazione da un livello molto sfumato,
+   luminosita' da uno piu' vicino al dettaglio.
+
+   E' il motivo per cui la pelle nei cartoni e' di un colore solo: se
+   si quantizza il colore cosi' com'e', una luce irregolare su un viso
+   diventa una mappa di chiazze che non seguono nessun tratto. */
+vec3 flatten(vec2 uv, float kLuma, float kCroma){
+  vec3 hsvL = rgb2hsv(fixTone(bsSoft(uv, kLuma)));
+  vec3 hsvC = rgb2hsv(fixTone(bsSoft(uv, kCroma)));
+  return hsv2rgb(vec3(hsvC.x, hsvC.y, hsvL.z));
+}
+
 /* Riduce i toni a pochi livelli lavorando su luminosita' e
    saturazione: quantizzare in RGB sposterebbe le tinte. */
 vec3 quantize(vec3 c, float levels){
@@ -122,11 +150,40 @@ vec3 quantize(vec3 c, float levels){
 
 const FRAG = {
 
+  /* ------- Ritratto: nessuna stilizzazione, solo bonifica -------
+     E' la versione da dare all'AI come riferimento di IDENTITA':
+     niente contorni, niente campiture, niente grana. Corregge la
+     dominante di colore, recupera le ombre sul viso e ravviva il
+     microcontrasto, che e' l'informazione da cui un modello estrae
+     i tratti somatici. */
+  ritratto: `
+  void main(){
+    float a = u_amount;
+    vec3 c = tx(v_uv);
+
+    // Bilanciamento del bianco alla "grey world": porta il colore
+    // medio della scena verso il neutro. Su un controluce al
+    // tramonto e' la correzione che conta piu' di tutte.
+    vec3 gain = vec3(lum(u_avg)) / max(u_avg, vec3(0.05));
+    gain = clamp(gain, vec3(0.72), vec3(1.45));
+    c *= mix(vec3(1.0), gain, a);
+
+    // Recupero delle ombre: agisce solo sui toni bassi, cosi' il
+    // viso in ombra emerge senza bruciare le alte luci.
+    vec3 lifted = pow(clamp(c, 0.0, 1.0), vec3(1.0 / (1.0 + 0.75 * a)));
+    c = mix(c, lifted, smoothstep(0.60, 0.03, lum(c)));
+
+    c += relief(v_uv) * 0.35 * a;                    // nitidezza sui tratti
+    c = mix(vec3(lum(c)), c, 1.0 + 0.12 * a);        // saturazione appena piena
+    c = (c - 0.5) * (1.0 + 0.10 * a) + 0.5;          // contrasto misurato
+    gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+  }`,
+
   /* ------- Cartoon: campiture piatte + contorno marcato ------- */
   cartoon: `
   void main(){
     float a = u_amount;
-    vec3 c = quantize(bsSoft(v_uv, 0.6 + a * 1.1), mix(14.0, 6.0, a));
+    vec3 c = quantize(flatten(v_uv, 0.6 + a * 1.1, 4.0 + a * 3.0), mix(14.0, 6.0, a));
     c = satBoost(c, a * 0.7);
     c = clamp(c * 1.06 + 0.02, 0.0, 1.0);
     c += relief(v_uv) * (0.55 - a * 0.15);                  // tiene occhi e denti leggibili
@@ -140,7 +197,7 @@ const FRAG = {
   anime: `
   void main(){
     float a = u_amount;
-    vec3 hsv = rgb2hsv(bsSoft(v_uv, 0.8 + a * 1.4));
+    vec3 hsv = rgb2hsv(flatten(v_uv, 0.8 + a * 1.4, 6.0 + a * 4.0));
     float bands = mix(9.0, 4.0, a);
     float v = floor(hsv.z * bands + 0.5) / bands;
     hsv.z = clamp(mix(hsv.z, v, 0.2 + a * 0.8) * 1.12 + 0.05, 0.0, 1.0);
@@ -162,8 +219,8 @@ const FRAG = {
   matita: `
   void main(){
     float a = u_amount;
-    float g = lum(tx(v_uv));
-    float b = lum(bsSoft(v_uv, 0.7 + a * 1.6));
+    float g = lum(fixTone(tx(v_uv)));
+    float b = lum(fixTone(bsSoft(v_uv, 0.7 + a * 1.6)));
     float dodge = clamp(g / max(b, 0.004), 0.0, 1.0);
     float ink = pow(1.0 - dodge, mix(1.25, 0.5, a)) * mix(1.3, 2.6, a);
     ink += smoothstep(0.18, 0.68, edgeMid(v_uv, 1.1)) * mix(0.35, 0.9, a);
@@ -184,7 +241,7 @@ const FRAG = {
   fumetto: `
   void main(){
     float a = u_amount;
-    vec3 base = bsSoft(v_uv, 0.5);
+    vec3 base = flatten(v_uv, 0.5, 4.0);
     float g = clamp(pow(lum(base), 0.70) * 1.35, 0.0, 1.0);
 
     float cell = mix(12.0, 8.0, a) * u_scale;
@@ -209,7 +266,7 @@ const FRAG = {
   acquerello: `
   void main(){
     float a = u_amount;
-    vec3 c = bsSoft(v_uv, 1.0 + a * 1.5);
+    vec3 c = flatten(v_uv, 1.0 + a * 1.5, 3.0 + a * 2.0);
     c = quantize(c, mix(16.0, 8.0, a));
     c = satBoost(c, 0.65 * a);
     c = clamp(c * 1.08 + 0.05, 0.0, 1.0);
@@ -238,6 +295,7 @@ const FRAG = {
 };
 
 const EFFECTS = [
+  { id: 'ritratto',   name: 'Ritratto',   emoji: '🪪', ref: 'identita' },
   { id: 'cartoon',    name: 'Cartoon',    emoji: '🎨', ref: 'ottimo'  },
   { id: 'anime',      name: 'Anime',      emoji: '✨', ref: 'ottimo'  },
   { id: 'matita',     name: 'Matita',     emoji: '✏️', ref: 'buono'   },
@@ -285,6 +343,52 @@ function downscale(source, sw, sh, longSide, reuse) {
   return out;
 }
 
+/* Colore medio, letto sul livello piu' piccolo: 250x333 pixel bastano
+   per stimare la dominante e costa niente.
+
+   La media e' pesata verso il centro. Su un controluce al tramonto la
+   media dell'intera scena e' dominata dal cielo arancione: il
+   bilanciamento del bianco sovracorregge e il viso vira al ciano,
+   cioe' peggiora esattamente il caso che deve risolvere. */
+function averageColor(cv) {
+  try {
+    const w = cv.width, h = cv.height;
+    const d = cv.getContext('2d').getImageData(0, 0, w, h).data;
+    const x0 = w * 0.18, x1 = w * 0.82, y0 = h * 0.18, y1 = h * 0.82;
+    let r = 0, g = 0, b = 0, tot = 0;
+    for (let y = 0; y < h; y++) {
+      const inY = y >= y0 && y <= y1;
+      for (let x = 0; x < w; x++) {
+        const wgt = (inY && x >= x0 && x <= x1) ? 1 : 0.2;
+        const i = (y * w + x) * 4;
+        r += d[i] * wgt; g += d[i + 1] * wgt; b += d[i + 2] * wgt; tot += wgt;
+      }
+    }
+    return [r / tot / 255, g / tot / 255, b / tot / 255];
+  } catch (e) {
+    return [0.5, 0.5, 0.5];   // canvas non leggibile: si resta neutri
+  }
+}
+
+/* Il canvas 2D di iOS non lancia eccezioni quando l'area richiesta
+   e' troppo grande: alloca e resta vuoto. L'unico modo di saperlo e'
+   scrivere e rileggere un pixel nell'angolo opposto. */
+function canvasFits(w, h) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  let ok = false;
+  try {
+    const x = c.getContext('2d');
+    if (x) {
+      x.fillStyle = '#ff0000';
+      x.fillRect(w - 1, h - 1, 1, 1);
+      ok = x.getImageData(w - 1, h - 1, 1, 1).data[0] === 255;
+    }
+  } catch (e) { ok = false; }
+  c.width = c.height = 0;      // libera subito il backing store
+  return ok;
+}
+
 /* ---------------------------------------------------------
    Renderer
    --------------------------------------------------------- */
@@ -297,7 +401,14 @@ class Renderer {
     const gl = this.gl;
     this.canvas = canvas;
     this.programs = {};
-    this.maxTexture = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+    // MAX_TEXTURE_SIZE e' dichiarato dal driver e non vincola il
+    // bersaglio di render: contano anche renderbuffer e viewport.
+    const dims = gl.getParameter(gl.MAX_VIEWPORT_DIMS) || [4096, 4096];
+    this.maxTexture = Math.min(
+      gl.getParameter(gl.MAX_TEXTURE_SIZE),
+      gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) || 4096,
+      dims[0], dims[1]
+    );
 
     this.buffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
@@ -343,7 +454,7 @@ class Renderer {
       u_tex: u('u_tex'), u_mid: u('u_mid'), u_base: u('u_base'),
       u_midTexel: u('u_midTexel'), u_baseTexel: u('u_baseTexel'),
       u_scale: u('u_scale'), u_amount: u('u_amount'), u_clean: u('u_clean'),
-      u_time: u('u_time'), u_flip: u('u_flip'),
+      u_avg: u('u_avg'), u_time: u('u_time'), u_flip: u('u_flip'),
     };
     return this.programs[id];
   }
@@ -352,6 +463,11 @@ class Renderer {
     const gl = this.gl;
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, source);
+    // Un upload oltre MAX_TEXTURE_SIZE non lancia eccezioni: la texture
+    // resta vuota e l'immagine esce nera. L'unico modo di accorgersene
+    // e' leggere l'errore subito dopo.
+    const err = gl.getError();
+    if (err !== gl.NO_ERROR) this.uploadError = { slot, err, w, h };
     this.sizes[slot] = [w, h];
   }
 
@@ -360,12 +476,24 @@ class Renderer {
      ricalcolarli a ogni frame. */
   load(source, sw, sh, opts) {
     const o = opts || {};
-    this.put(this.texDetail, source, sw, sh, 'detail');
+    this.uploadError = null;
+
+    /* Il livello di dettaglio viene portato alla risoluzione di uscita
+       e comunque sotto il limite di texture del dispositivo. Due
+       motivi: una foto da 4608 px caricata tale quale su una GPU con
+       limite 4096 fallisce in silenzio; e minificare una texture senza
+       mipmap campiona per punti, quindi il microcontrasto arriverebbe
+       come rumore aliasato invece che come dettaglio. */
+    const detSide = Math.min(o.outSide || MID_SIDE, this.maxTexture);
+    const shrink = Math.max(sw, sh) > detSide * 1.25;
+    const det = shrink ? downscale(source, sw, sh, detSide, o.detailCanvas) : source;
+    this.put(this.texDetail, det, shrink ? det.width : sw, shrink ? det.height : sh, 'detail');
     const mid = o.mid || (Math.max(sw, sh) <= MID_SIDE * 1.25 ? null : downscale(source, sw, sh, MID_SIDE, o.midCanvas));
     if (mid) this.put(this.texMid, mid, mid.width, mid.height, 'mid');
     else { this.put(this.texMid, source, sw, sh, 'mid'); }
     const base = o.base || downscale(mid || source, mid ? mid.width : sw, mid ? mid.height : sh, BASE_SIDE, o.baseCanvas);
     this.put(this.texBase, base, base.width, base.height, 'base');
+    this.avg = averageColor(base);
   }
 
   draw(effectId, o) {
@@ -387,6 +515,8 @@ class Renderer {
     gl.uniform1f(s.u_scale,  Math.max(w, h) / MID_SIDE);
     gl.uniform1f(s.u_amount, o.amount);
     gl.uniform1f(s.u_clean,  o.clean ? 1 : 0);
+    const avg = this.avg || [0.5, 0.5, 0.5];
+    gl.uniform3f(s.u_avg, avg[0], avg[1], avg[2]);
     gl.uniform1f(s.u_time,   o.time || 0);
     gl.uniform1f(s.u_flip,   o.flip ? 1 : 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);

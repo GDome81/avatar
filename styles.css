@@ -185,3 +185,73 @@ input[type=range]::-moz-range-thumb{width:24px; height:24px; border:0; border-ra
   background:linear-gradient(135deg,#5fd0ff,#9ef7c5); color:#10131b; border-color:transparent;
 }
 .toggle:active{transform:scale(.96)}
+
+/* ---------- ritaglio ---------- */
+#cropOverlay{
+  position:absolute; inset:0; width:100%; height:100%; z-index:4;
+  touch-action:none; cursor:grab;
+}
+#cropOverlay.hidden{display:none}
+.crop-row{display:flex; align-items:center; justify-content:center; gap:10px; padding:0 16px}
+.select-wrap{
+  display:flex; align-items:center; gap:7px; font-size:12px; color:#dcdce8;
+  background:var(--panel); border:1px solid #ffffff24; border-radius:999px; padding:6px 8px 6px 14px;
+  backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
+}
+.select-wrap select{
+  appearance:none; -webkit-appearance:none; border:0; background:#ffffff1a; color:var(--text);
+  font-size:12.5px; font-weight:600; padding:6px 12px; border-radius:999px;
+}
+.chip.chip-id[aria-pressed="true"]{background:linear-gradient(135deg,#5fd0ff,#9ef7c5); color:#10131b}
+.chip.chip-id{border-color:#5fd0ff66}
+
+/* ---------- risultati ---------- */
+.results-title{margin:0; font-size:20px; letter-spacing:-.2px}
+.results{
+  display:flex; gap:14px; overflow-x:auto; width:100%; padding:4px 16px 8px;
+  scrollbar-width:none; -webkit-overflow-scrolling:touch; align-items:flex-start; justify-content:safe center;
+}
+.results::-webkit-scrollbar{display:none}
+.result-card{
+  flex:0 0 auto; width:min(74vw, 300px); margin:0; display:flex; flex-direction:column; gap:9px;
+  background:#14141f; border:1px solid #ffffff1a; border-radius:18px; padding:12px;
+}
+.result-card img{width:100%; border-radius:12px; display:block; background:#07070c}
+.result-card figcaption{font-size:12.5px; color:var(--muted); line-height:1.45}
+.result-card .meta{color:#7d7d95; font-size:11.5px}
+.badge{
+  align-self:flex-start; font-size:11px; font-weight:800; letter-spacing:.5px; text-transform:uppercase;
+  background:#ffffff1f; color:#e9e9f4; padding:5px 11px; border-radius:999px;
+}
+.badge-id{background:linear-gradient(135deg,#5fd0ff,#9ef7c5); color:#10131b}
+.ghost-btn.small{padding:11px 16px; font-size:14px; width:100%}
+
+/* ---------- testo per l'AI ---------- */
+.prompt{
+  width:100%; max-width:640px; flex:1; min-height:36vh; resize:none;
+  background:#0f0f18; color:#e8e8f2; border:1px solid #ffffff1f; border-radius:16px;
+  padding:14px; font-family:ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size:12.5px; line-height:1.55; white-space:pre-wrap;
+}
+#preview, #textPanel{justify-content:flex-start; gap:14px; padding-top:calc(var(--safe-t) + 22px)}
+#textPanel{padding-bottom:calc(var(--safe-b) + 18px)}
+
+/* ---------- correzioni di impaginazione ---------- */
+/* In modo foto il canvas si ferma sopra i comandi, cosi' l'immagine
+   e il riquadro di ritaglio hanno piu' spazio utile. */
+#stage.photo-mode #canvas,
+#stage.photo-mode #cropOverlay{ bottom:clamp(230px, 33vh, 300px) }
+#stage.photo-mode.ui-hidden #canvas,
+#stage.photo-mode.ui-hidden #cropOverlay{ bottom:0 }
+
+/* Le schede dei risultati vanno in colonna: la seconda non deve
+   restare fuori schermo, e' metà del senso dell'esportazione. */
+#preview{ overflow-y:auto; justify-content:flex-start }
+.results{ flex-direction:column; align-items:center; overflow-x:visible }
+.result-card{ width:min(92vw, 420px) }
+.result-card img{ max-height:44vh; object-fit:contain }
+@media (min-width:760px){
+  .results{ flex-direction:row; align-items:flex-start }
+  .result-card{ width:min(46vw, 340px) }
+}
+.preview-actions{ padding-bottom:6px }

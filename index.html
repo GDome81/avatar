@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#0b0b12">
-<meta name="description" content="Vediti in stile cartoon, anime o disegno a matita usando la fotocamera del telefono. Funziona nel browser, niente app da installare.">
+<meta name="description" content="Prepara il riferimento di un personaggio per libri illustrati e fumetti: ritaglia, bonifica la foto ed esporta la coppia identità + stile da dare all'AI.">
 <title>Cartoon Cam</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon.svg">
@@ -20,10 +20,11 @@
   <div class="intro-card">
     <div class="logo">🎨</div>
     <h1>Cartoon Cam</h1>
-    <p class="tagline">Trasformati in <b>cartoon</b>, <b>anime</b> o <b>disegno</b>: dal vivo con la fotocamera, oppure partendo da una foto della galleria, esportata a piena risoluzione per costruire un personaggio.</p>
-    <button id="btnStart" class="big-btn">Attiva la fotocamera</button>
-    <button id="btnStartPick" class="ghost-btn wide">Parti da una foto della galleria</button>
-    <p class="fineprint">Il video non lascia mai il tuo telefono: l'elaborazione avviene dentro il browser.</p>
+    <p class="tagline">Trasformati in <b>cartoon</b>, <b>anime</b> o <b>disegno</b>. E se il risultato deve servire a un'AI per creare un personaggio, prepara il riferimento come si deve: ritaglio guidato, luce bonificata, coppia <b>identità + stile</b>.</p>
+    <button id="btnStartPick" class="big-btn">Parti da una foto</button>
+    <button id="btnStartShot" class="ghost-btn wide">Scatta con la fotocamera del telefono</button>
+    <button id="btnStart" class="ghost-btn wide">Anteprima dal vivo</button>
+    <p class="fineprint">Nessuna immagine lascia il telefono: tutta l'elaborazione avviene nel browser.</p>
   </div>
 </section>
 
@@ -37,14 +38,14 @@
   </div>
 </section>
 
-<!-- ============ Camera ============ -->
+<!-- ============ Palco ============ -->
 <main id="stage" class="hidden">
   <video id="video" playsinline autoplay muted></video>
   <canvas id="canvas"></canvas>
+  <canvas id="cropOverlay"></canvas>
 
   <div id="flash"></div>
 
-  <!-- barra superiore -->
   <div class="topbar">
     <button id="btnFlip" class="icon-btn only-cam" title="Cambia fotocamera" aria-label="Cambia fotocamera">🔄</button>
     <button id="btnCamera" class="icon-btn only-photo" title="Torna alla fotocamera" aria-label="Torna alla fotocamera">📷</button>
@@ -52,12 +53,24 @@
       <div id="effectName" class="effect-name">Cartoon</div>
       <span id="modeLabel" class="mode-label"></span>
     </div>
-    <button id="btnPick" class="icon-btn" title="Usa una foto dalla galleria" aria-label="Usa una foto dalla galleria">🖼️</button>
+    <button id="btnPick" class="icon-btn" title="Usa una foto della galleria" aria-label="Usa una foto della galleria">🖼️</button>
     <button id="btnFull" class="icon-btn" title="Schermo intero" aria-label="Schermo intero">⛶</button>
   </div>
 
-  <!-- controlli inferiori -->
   <div class="bottombar">
+    <div class="crop-row only-photo">
+      <button id="btnCrop" class="toggle" type="button" aria-pressed="false"><span class="em">🎯</span>Ritaglio</button>
+      <label class="select-wrap">
+        <span>Uscita</span>
+        <select id="exportSize" aria-label="Risoluzione di uscita">
+          <option value="1024">1024 px</option>
+          <option value="1536" selected>1536 px</option>
+          <option value="2048">2048 px</option>
+          <option value="max">piena</option>
+        </select>
+      </label>
+    </div>
+
     <div class="slider-row">
       <span class="slider-label">Intensità</span>
       <input id="amount" type="range" min="0" max="100" value="70" aria-label="Intensità effetto">
@@ -67,7 +80,10 @@
 
     <div class="toggle-row">
       <button id="btnClean" class="toggle" type="button" aria-pressed="true">
-        <span class="em">🤖</span>Pulito per l’AI
+        <span class="em">🤖</span>Pulito per l'AI
+      </button>
+      <button id="btnPair" class="toggle only-photo" type="button" aria-pressed="true">
+        <span class="em">🧩</span>Coppia identità + stile
       </button>
     </div>
 
@@ -79,24 +95,34 @@
   </div>
 
   <div id="toast" class="toast"></div>
-
   <div id="recBadge" class="rec-badge hidden"><span class="dot"></span><span id="recTime">0:00</span></div>
 </main>
 
-<!-- ============ Anteprima scatto ============ -->
+<!-- ============ Risultati ============ -->
 <section id="preview" class="screen hidden">
-  <div class="preview-wrap">
-    <img id="previewImg" alt="Anteprima dello scatto">
-    <video id="previewVid" class="hidden" controls playsinline></video>
-  </div>
+  <h2 class="results-title">Pronte da dare all'AI</h2>
+  <div id="results" class="results"></div>
   <div class="preview-actions">
     <button id="btnClose" class="ghost-btn">Chiudi</button>
-    <button id="btnSave" class="big-btn compact">Salva / Condividi</button>
+    <button id="btnText" class="big-btn compact">Testo per l'AI</button>
   </div>
-  <p id="saveHint" class="fineprint center">Su iPhone: tieni premuto sull'immagine e scegli “Aggiungi a Foto”.</p>
+  <p id="saveHint" class="fineprint center"></p>
 </section>
 
-<input id="filePick" type="file" accept="image/*" hidden>
+<!-- ============ Testo per l'AI ============ -->
+<section id="textPanel" class="screen hidden">
+  <h2 class="results-title">Istruzioni da incollare</h2>
+  <p class="fineprint center">Il prompt è in inglese, che è la lingua in cui questi modelli rendono meglio. Sostituisci le parti tra parentesi quadre.</p>
+  <textarea id="promptText" class="prompt" readonly spellcheck="false"></textarea>
+  <div class="preview-actions">
+    <button id="btnTextClose" class="ghost-btn">Indietro</button>
+    <button id="btnCopy" class="big-btn compact">Copia</button>
+  </div>
+</section>
+
+<!-- accept esplicito: mettere image/heic farebbe convertire in HEIC su Safari 17+ -->
+<input id="filePick" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+<input id="fileShot" type="file" accept="image/jpeg,image/png" capture="environment" hidden>
 
 <script src="engine.js"></script>
 <script src="app.js"></script>
