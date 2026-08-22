@@ -74,9 +74,19 @@ In modo foto:
 
 - **🎯 Ritaglio** — trascina il riquadro, pizzica per ridimensionarlo. Le guide tratteggiate indicano dove mettere la testa e la linea degli occhi
 - **Uscita** — 1024 / 1536 / 2048 px, oppure piena. Il default 1536 è voluto: oltre i 2048 px l'identità non migliora, perché i modelli ricampionano su griglie fisse. Si guadagna **ritagliando**, non ingrandendo
-- **🤖 Pulito per l'AI** — spegne grana, retino, tratteggio e vignettatura
-- **🧩 Coppia identità + stile** — un solo scatto, due file
-- **◻️ Fondo neutro** e **🙂 Caricatura** — richiedono il rilevamento del volto (vedi sotto)
+Sopra l'immagine stanno solo gli effetti e lo scatto. Tutto il resto — intensità,
+fondo neutro, caricatura, ritaglio, risoluzione — vive nel pannello **⚙ Regola**,
+che si apre a metà schermo lasciando l'immagine visibile sopra di sé, così le
+regolazioni si fanno guardando il risultato.
+
+- **Riquadro di ritaglio** — trascina il riquadro per spostarlo, trascina un
+  angolo per ridimensionarlo (le proporzioni restano 4:5), oppure pizzica con due
+  dita. Al bordo dell'immagine il riquadro si ferma a crescere invece di scattare
+  di lato
+- **Fondo neutro** — attivo per default: lo sfondo viene sostituito da un fondo
+  piatto in **tutti** gli effetti, ognuno col proprio (grigio per i disegni a
+  colori, carta per matita e acquerello, scuro per il neon)
+- **Caricatura** — occhi più grandi, cranio più alto, mandibola più stretta
 - **＋ Serie** — fino a cinque pose in una sola tavola
 
 ## La serie: fino a cinque pose
@@ -100,7 +110,14 @@ come differenze del personaggio.
 
 ## Il testo per l'AI
 
-Il pulsante *Testo per l'AI* apre un modulo con i campi della **bibbia del
+Il prompt non chiede una sola immagine: chiede al modello di produrre **due
+tavole** — il *turnaround* (fronte, tre quarti destro e sinistro, profilo, retro)
+e il *foglio delle espressioni* (neutra, sorriso, risata, sorpresa, rabbia,
+tristezza). Il turnaround dà al modello la struttura della testa invece di una
+sola proiezione; le espressioni fissano come si deforma quel viso. Sono i due
+documenti che tengono il personaggio identico da una tavola all'altra.
+
+Il pulsante apre un modulo con i campi della **bibbia del
 personaggio** — età, forma del viso, capelli, occhi, incarnato, corporatura,
 tratti distintivi, colori dell'abito. Sono tutti **facoltativi**: quelli lasciati
 vuoti vengono **tolti** dal prompt, non compaiono come segnaposto. Servono a

@@ -28,18 +28,25 @@ const Face = {
       const { FilesetResolver, FaceLandmarker, ImageSegmenter } = mod;
       this.vision = await FilesetResolver.forVisionTasks('./vendor/mediapipe/wasm');
 
-      // delegate GPU dove c'e', con ricaduta su CPU
-      const crea = async (delegate) => {
-        this.landmarker = await FaceLandmarker.createFromOptions(this.vision, {
-          baseOptions: { modelAssetPath: './vendor/models/face_landmarker.task', delegate },
-          runningMode: 'IMAGE', numFaces: 1, outputFaceBlendshapes: false,
-        });
-        this.segmenter = await ImageSegmenter.createFromOptions(this.vision, {
-          baseOptions: { modelAssetPath: './vendor/models/selfie_segmenter.tflite', delegate },
-          runningMode: 'IMAGE', outputCategoryMask: true, outputConfidenceMasks: false,
-        });
-      };
-      try { await crea('GPU'); } catch (e) { await crea('CPU'); }
+      /* Delegate CPU, non GPU. Su iOS il delegate GPU ha un difetto di
+         correttezza che NON solleva errori: restituisce categorie
+         mescolate, quindi nessun try/catch lo intercetta. E quando
+         fallisce davvero termina il modulo, cosi' un secondo tentativo
+         girerebbe su un'istanza morta. Qui i tensori sono 128 e 256
+         pixel di lato, una volta sola: la GPU non ha nulla da
+         guadagnare, il costo sta nel contesto e negli upload. */
+      this.landmarker = await FaceLandmarker.createFromOptions(this.vision, {
+        baseOptions: { modelAssetPath: './vendor/models/face_landmarker.task', delegate: 'CPU' },
+        runningMode: 'IMAGE', numFaces: 1, outputFaceBlendshapes: false,
+      });
+      this.segmenter = await ImageSegmenter.createFromOptions(this.vision, {
+        baseOptions: { modelAssetPath: './vendor/models/selfie_segmenter.tflite', delegate: 'CPU' },
+        // maschera di confidenza, non di categoria: e' un valore continuo in
+        // cui il primo canale vale 1 sulla persona per definizione, quindi
+        // non c'e' nessuna polarita' da indovinare, e il bordo arriva gia'
+        // sfumato invece di essere una soglia netta
+        runningMode: 'IMAGE', outputCategoryMask: false, outputConfidenceMasks: true,
+      });
 
       this.stato = 'pronto';
       if (onStato) onStato('pronto');
@@ -87,40 +94,22 @@ const Face = {
      Viene disegnata a risoluzione ridotta e riportata in scala: il
      ricampionamento bilineare fa da sfumatura sul bordo, che serve a
      non lasciare un contorno tagliato con l'accetta. */
-  mascheraCanvas(maschera, w, h, centro) {
-    const arr = maschera.getAsUint8Array();
+  mascheraCanvas(maschera, w, h) {
+    const arr = maschera.getAsFloat32Array();
     const mw = maschera.width, mh = maschera.height;
-
-    /* La polarita' della maschera non e' la stessa in tutte le versioni
-       del modello: a seconda dell'ordine delle categorie, la persona
-       puo' essere lo zero o l'uno. Invece di fidarsi, si campiona la
-       maschera dove SAPPIAMO che c'e' la persona — il centro del volto
-       rilevato, o il centro dell'immagine se il volto manca — e se li'
-       risulta vuota, si inverte. */
-    const cx = Math.round(Math.min(0.98, Math.max(0.02, centro ? centro.x : 0.5)) * (mw - 1));
-    const cy = Math.round(Math.min(0.98, Math.max(0.02, centro ? centro.y : 0.5)) * (mh - 1));
-    let dentro = 0, campioni = 0;
-    const r = Math.max(2, Math.round(Math.min(mw, mh) * 0.04));
-    for (let y = Math.max(0, cy - r); y <= Math.min(mh - 1, cy + r); y++) {
-      for (let x = Math.max(0, cx - r); x <= Math.min(mw - 1, cx + r); x++) {
-        dentro += arr[y * mw + x] > 0 ? 1 : 0; campioni++;
-      }
-    }
-    const inverti = campioni > 0 && (dentro / campioni) < 0.5;
 
     const piccolo = document.createElement('canvas');
     piccolo.width = mw; piccolo.height = mh;
-    const id = piccolo.getContext('2d').createImageData(mw, mh);
+    const ctx = piccolo.getContext('2d');
+    const id = ctx.createImageData(mw, mh);
     for (let i = 0; i < arr.length; i++) {
-      let v = arr[i] > 0 ? 255 : 0;
-      if (inverti) v = 255 - v;
+      const v = Math.max(0, Math.min(255, Math.round(arr[i] * 255)));
       id.data[i * 4] = v; id.data[i * 4 + 1] = v; id.data[i * 4 + 2] = v; id.data[i * 4 + 3] = 255;
     }
-    piccolo.getContext('2d').putImageData(id, 0, 0);
+    ctx.putImageData(id, 0, 0);
 
-    // Ridotta un poco: il ricampionamento bilineare della GPU la riporta
-    // in scala con un bordo sfumato, che e' cio' che evita il contorno
-    // tagliato con l'accetta attorno alla persona.
+    // ridotta un poco: il ricampionamento bilineare della GPU allarga la
+    // sfumatura del bordo, che e' cio' che evita il contorno tagliato
     const out = document.createElement('canvas');
     out.width = Math.max(48, Math.round(mw / 1.5));
     out.height = Math.max(48, Math.round(mh / 1.5));
@@ -146,10 +135,10 @@ const Face = {
     } catch (e) { res.erroreVolto = String(e && e.message); }
     try {
       const s = this.segmenter.segment(sorgente);
-      if (s.categoryMask) {
-        const centro = res.volto ? res.volto.centro : null;
-        res.maschera = this.mascheraCanvas(s.categoryMask, w, h, centro);
-        s.categoryMask.close();
+      const m = s.confidenceMasks && s.confidenceMasks[0];
+      if (m) {
+        res.maschera = this.mascheraCanvas(m, w, h);
+        m.close();
       }
     } catch (e) { res.erroreMaschera = String(e && e.message); }
     return res;

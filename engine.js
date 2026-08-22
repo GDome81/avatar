@@ -227,13 +227,18 @@ vec2 warp(vec2 uv0){
    fondo piatto. Un design di personaggio su fondo uniforme e' anche
    cio' che serve a un modello generativo: lo sfondo di una foto
    rientrerebbe come palette e ambientazione in tutte le tavole. */
-vec4 finish(vec3 c, vec2 uv){
+vec4 finishCol(vec3 c, vec2 uv, vec3 fondo){
   if (u_bgFlat > 0.5) {
     float m = texture2D(u_mask, cl(uv)).r;
-    c = mix(u_bg, c, smoothstep(0.30, 0.62, m));
+    c = mix(fondo, c, smoothstep(0.30, 0.62, m));
   }
   return vec4(clamp(c, 0.0, 1.0), 1.0);
 }
+
+/* Il fondo non e' lo stesso per tutti: su un disegno a matita un
+   rettangolo grigio attorno al foglio si vede, quindi ogni effetto
+   passa il proprio. */
+vec4 finish(vec3 c, vec2 uv){ return finishCol(c, uv, u_bg); }
 
 /* Microcontrasto: quanto il dettaglio si discosta dal livello
    contorni. Serve a non perdere occhi, denti e montature quando
@@ -419,7 +424,7 @@ const FRAG = {
     float grain = hash(floor(px / 2.0)) * 0.07 * (1.0 - u_clean);
     vec3 paper = vec3(0.965, 0.950, 0.925) - grain;
     vec3 lead  = vec3(0.11, 0.10, 0.13) + grain * 0.5;
-    gl_FragColor = vec4(mix(paper, lead, ink), 1.0);
+    gl_FragColor = finishCol(mix(paper, lead, ink), uv, vec3(0.965, 0.950, 0.925));
   }`,
 
   /* ------- Retino: mezzatinta alla vecchia maniera ------- */
@@ -465,7 +470,7 @@ const FRAG = {
     c += (hash(floor(px / 3.0)) - 0.5) * 0.10 * a * (1.0 - u_clean);
     float vg = smoothstep(1.15, 0.35, length(uv - 0.5) * 1.4);
     c = mix(vec3(0.99, 0.98, 0.95), c, mix(1.0, vg, 0.55 * a * (1.0 - u_clean)));
-    gl_FragColor = finish(c, uv);
+    gl_FragColor = finishCol(c, uv, vec3(0.99, 0.98, 0.95));
   }`,
 
   /* ------- Neon ------- */
@@ -478,7 +483,7 @@ const FRAG = {
     float hue  = fract(uv.y * 0.6 + uv.x * 0.2 + u_time * 0.06);
     vec3 neon  = hsv2rgb(vec3(hue, 0.85, 1.0));
     vec3 dark  = md(uv) * mix(0.40, 0.06, a);
-    gl_FragColor = vec4(clamp(dark + neon * (g * 1.3 + glow * 0.7), 0.0, 1.0), 1.0);
+    gl_FragColor = finishCol(dark + neon * (g * 1.3 + glow * 0.7), uv, vec3(0.03, 0.03, 0.05));
   }`,
 };
 

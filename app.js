@@ -38,7 +38,7 @@ let lastStyle = effect === 'ritratto' ? 'cartoon' : effect;
 let amount = Number(store.get('amount', 70)) / 100;
 let clean = store.get('clean', '1') === '1';
 let pairOn = store.get('pair', '0') === '1';
-let bgOn = store.get('bg', '0') === '1';
+let bgOn = store.get('bg', '1') === '1';   // togliere lo sfondo e' il comportamento normale
 let carOn = store.get('car', '0') === '1';
 let car = Number(store.get('carAmt', 50)) / 100;
 let analisi = null;                   // volto e maschera dell'anteprima
@@ -220,11 +220,22 @@ function loop() {
    Modo foto
    --------------------------------------------------------- */
 
+/* L'altezza della barra dei comandi cambia (la riga della serie
+   appare e sparisce): viene misurata e passata al CSS, cosi' l'immagine
+   occupa esattamente lo spazio che resta invece di lasciare un vuoto. */
+function misuraBarra() {
+  const bb = document.querySelector('.bottombar');
+  if (!bb) return;
+  const h = Math.round(bb.getBoundingClientRect().height);
+  if (h > 0) document.documentElement.style.setProperty('--bar', h + 'px');
+  drawOverlay();
+}
+
 function setMode(m) {
   mode = m;
   stage.classList.toggle('photo-mode', m === 'foto');
-  $('#modeLabel').textContent = m === 'foto' ? 'Foto' : '';
   if (m !== 'foto') { crop.on = false; syncCrop(); }
+  requestAnimationFrame(misuraBarra);
 }
 
 [filePick, fileShot].forEach((input) => {
@@ -433,12 +444,19 @@ function drawOverlay() {
   g.stroke();
   g.setLineDash([]);
 
-  // maniglie agli angoli
-  g.fillStyle = '#fff';
-  const hs = 9;
-  [[rx, ry], [rx + rw, ry], [rx, ry + rh], [rx + rw, ry + rh]].forEach(([x, y]) => {
-    g.fillRect(x - hs / 2, y - hs / 2, hs, hs);
-  });
+  // maniglie: grandi, perche' si prendono col dito
+  const attiva = gesto && gesto.tipo === 'maniglia' ? gesto.ang : null;
+  const punti = { tl: [rx, ry], tr: [rx + rw, ry], bl: [rx, ry + rh], br: [rx + rw, ry + rh] };
+  for (const k in punti) {
+    const [x, y] = punti[k];
+    g.beginPath();
+    g.arc(x, y, attiva === k ? 15 : 12, 0, Math.PI * 2);
+    g.fillStyle = attiva === k ? '#9ef7c5' : '#ffffff';
+    g.fill();
+    g.strokeStyle = 'rgba(0,0,0,.35)';
+    g.lineWidth = 1.5;
+    g.stroke();
+  }
 
   g.fillStyle = 'rgba(255,255,255,.9)';
   g.font = '600 12px -apple-system, system-ui, sans-serif';
@@ -446,49 +464,48 @@ function drawOverlay() {
   g.fillText('occhi qui', rx + rw / 2, ry + rh * 0.31);
 }
 
+/* ---- gesti sul riquadro ----
+
+   Tre modi, deciso una volta sola al tocco iniziale:
+     maniglia  trascinando un angolo si ridimensiona, ancorati
+               all'angolo opposto, mantenendo le proporzioni
+     pan       trascinando altrove si sposta
+     pizzico   con due dita si ridimensiona attorno al centro
+
+   Gli spostamenti si calcolano dalla posizione INIZIALE del dito, non
+   sommando le differenze fra un evento e l'altro: se un evento viene
+   perso, il riquadro non ci resta storto. */
+
 const pointers = new Map();
-let pinchStart = 0, rectStart = null;
+const RAGGIO_MANIGLIA = 34;      // px sullo schermo: un dito non e' preciso
+let gesto = null;
 
-overlay.addEventListener('pointerdown', (ev) => {
-  if (!crop.on) return;
-  overlay.setPointerCapture(ev.pointerId);
-  pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
-  rectStart = Object.assign({}, crop.rect);
-  if (pointers.size === 2) pinchStart = pinchDistance();
-  ev.preventDefault();
-});
-
-overlay.addEventListener('pointermove', (ev) => {
-  if (!pointers.has(ev.pointerId) || !crop.rect) return;
-  const prev = pointers.get(ev.pointerId);
-  pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+function scalaSchermo() {
   const c = contentRect();
-  const s = c.w / photo.w;
+  return { s: c.w / photo.w, c };
+}
 
-  if (pointers.size >= 2) {
-    const d = pinchDistance();
-    if (pinchStart > 0 && d > 0) {
-      const cx = crop.rect.x + crop.rect.w / 2, cy = crop.rect.y + crop.rect.h / 2;
-      crop.rect.w = rectStart.w * (pinchStart / d);
-      clampCrop();
-      crop.rect.x = cx - crop.rect.w / 2;
-      crop.rect.y = cy - crop.rect.h / 2;
-      clampCrop();
-    }
-  } else {
-    crop.rect.x += (ev.clientX - prev.x) / s;
-    crop.rect.y += (ev.clientY - prev.y) / s;
-    clampCrop();
+function schermoDaSorgente(px, py) {
+  const { s, c } = scalaSchermo();
+  return { x: c.x + px * s, y: c.y + py * s };
+}
+
+function maniglia(cx, cy) {
+  const r = crop.rect;
+  if (!r) return null;
+  const ang = {
+    tl: schermoDaSorgente(r.x, r.y),
+    tr: schermoDaSorgente(r.x + r.w, r.y),
+    bl: schermoDaSorgente(r.x, r.y + r.h),
+    br: schermoDaSorgente(r.x + r.w, r.y + r.h),
+  };
+  let vinta = null, minima = RAGGIO_MANIGLIA;
+  for (const k in ang) {
+    const d = Math.hypot(cx - ang[k].x, cy - ang[k].y);
+    if (d < minima) { minima = d; vinta = k; }
   }
-  drawOverlay();
-  ev.preventDefault();
-});
-
-['pointerup', 'pointercancel'].forEach((t) => overlay.addEventListener(t, (ev) => {
-  pointers.delete(ev.pointerId);
-  if (pointers.size < 2) pinchStart = 0;
-  rectStart = crop.rect ? Object.assign({}, crop.rect) : null;
-}));
+  return vinta;
+}
 
 function pinchDistance() {
   const p = [...pointers.values()];
@@ -496,20 +513,106 @@ function pinchDistance() {
   return Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
 }
 
+overlay.addEventListener('pointerdown', (ev) => {
+  if (!crop.on || !crop.rect || !photo) return;
+  pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+
+  if (pointers.size === 2) {
+    gesto = { tipo: 'pizzico', d0: pinchDistance(), rect0: Object.assign({}, crop.rect) };
+  } else {
+    const ang = maniglia(ev.clientX, ev.clientY);
+    gesto = {
+      tipo: ang ? 'maniglia' : 'pan', ang, pid: ev.pointerId,
+      x0: ev.clientX, y0: ev.clientY, rect0: Object.assign({}, crop.rect),
+    };
+    try { overlay.setPointerCapture(ev.pointerId); } catch (e) {}
+  }
+  drawOverlay();
+  ev.preventDefault();
+});
+
+overlay.addEventListener('pointermove', (ev) => {
+  if (!gesto || !pointers.has(ev.pointerId) || !crop.rect) return;
+  pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+  const { s } = scalaSchermo();
+  const r0 = gesto.rect0;
+
+  if (gesto.tipo === 'pizzico') {
+    const d = pinchDistance();
+    if (d > 0 && gesto.d0 > 0) {
+      const cx = r0.x + r0.w / 2, cy = r0.y + r0.h / 2;
+      crop.rect.w = r0.w * (gesto.d0 / d);
+      clampCrop();
+      crop.rect.x = cx - crop.rect.w / 2;
+      crop.rect.y = cy - crop.rect.h / 2;
+      clampCrop();
+    }
+  } else if (gesto.tipo === 'maniglia') {
+    // l'angolo opposto resta fermo
+    const fisso = {
+      tl: { x: r0.x + r0.w, y: r0.y + r0.h },
+      tr: { x: r0.x,        y: r0.y + r0.h },
+      bl: { x: r0.x + r0.w, y: r0.y },
+      br: { x: r0.x,        y: r0.y },
+    }[gesto.ang];
+    const { c } = scalaSchermo();
+    const px = (ev.clientX - c.x) / s, py = (ev.clientY - c.y) / s;
+    const versoSinistra = gesto.ang === 'tl' || gesto.ang === 'bl';
+    const versoAlto     = gesto.ang === 'tl' || gesto.ang === 'tr';
+
+    // la larghezza segue la distanza maggiore fra le due, cosi' il
+    // riquadro non si incolla a un lato
+    let w = Math.max(Math.abs(px - fisso.x), Math.abs(py - fisso.y) * CROP_RATIO);
+
+    /* Il limite si applica alla DIMENSIONE, non alla posizione: se si
+       vincolasse la posizione, arrivati al bordo dell'immagine tutto il
+       riquadro scatterebbe di lato invece di fermarsi a crescere. */
+    const maxOrizz = versoSinistra ? fisso.x : photo.w - fisso.x;
+    const maxVert  = versoAlto ? fisso.y : photo.h - fisso.y;
+    w = Math.min(w, maxOrizz, maxVert * CROP_RATIO);
+
+    crop.rect.w = w;
+    clampCrop();
+    crop.rect.x = versoSinistra ? fisso.x - crop.rect.w : fisso.x;
+    crop.rect.y = versoAlto ? fisso.y - crop.rect.h : fisso.y;
+    clampCrop();
+  } else {
+    crop.rect.x = r0.x + (ev.clientX - gesto.x0) / s;
+    crop.rect.y = r0.y + (ev.clientY - gesto.y0) / s;
+    clampCrop();
+  }
+  drawOverlay();
+  ev.preventDefault();
+});
+
+['pointerup', 'pointercancel', 'pointerleave'].forEach((t) =>
+  overlay.addEventListener(t, (ev) => {
+    pointers.delete(ev.pointerId);
+    if (pointers.size === 0) gesto = null;
+    else if (gesto && gesto.tipo === 'pizzico') {
+      // tolto un dito: si riparte da capo come trascinamento
+      const resta = [...pointers.entries()][0];
+      gesto = { tipo: 'pan', pid: resta[0], x0: resta[1].x, y0: resta[1].y,
+                rect0: Object.assign({}, crop.rect) };
+    }
+    drawOverlay();
+  })
+);
+
 const cropBtn = $('#btnCrop');
 function syncCrop() {
   cropBtn.setAttribute('aria-pressed', String(crop.on));
   drawOverlay();
 }
 cropBtn.addEventListener('click', () => {
-  if (mode !== 'foto') return;
+  if (mode !== 'foto') return showToast('Il ritaglio vale sulle foto', 2600);
   crop.on = !crop.on;
   if (crop.on && !crop.rect) resetCrop();
   syncCrop();
-  showToast(crop.on ? 'Trascina il riquadro, pizzica per ridimensionarlo' : 'Ritaglio disattivato: esporta l’immagine intera', 3000);
+  showToast(crop.on ? 'Trascina il riquadro, pizzica per stringere' : 'Ritaglio spento: esporti l’immagine intera', 3000);
 });
 
-window.addEventListener('resize', () => { if (mode === 'foto') drawOverlay(); });
+window.addEventListener('resize', () => { misuraBarra(); if (mode === 'foto') drawOverlay(); });
 window.addEventListener('orientationchange', () => setTimeout(drawOverlay, 300));
 
 /* ---------------------------------------------------------
@@ -673,12 +776,13 @@ let serieSet = null;
 let ultimaTavola = false;
 
 function syncSerie() {
-  $('#serieLabel').textContent = `Serie ${serie.length}/${SERIE_MAX}`;
+  $('#serieLabel').textContent = `${serie.length}/${SERIE_MAX}`;
   $('#btnSerie').setAttribute('aria-pressed', String(serie.length > 0));
   $('#serieRow').classList.toggle('hidden', serie.length === 0);
   $('#seriePros').textContent = serie.length < SERIE_MAX
-    ? `Prossima posa suggerita: ${SERIE_POSE[serie.length]}`
-    : 'Serie completa: componi la tavola';
+    ? `Prossima: ${SERIE_POSE[serie.length]}`
+    : 'Serie completa';
+  requestAnimationFrame(misuraBarra);
 }
 
 $('#btnSerie').addEventListener('click', async () => {
@@ -812,6 +916,7 @@ function showResults(list) {
   $('#saveHint').textContent = results.length > 1
     ? 'La foto reale resta un’opzione tua: per l’AI basta il disegno più il testo.'
     : 'Su iPhone puoi anche tenere premuto sull’immagine per salvarla in Foto.';
+  apriSheet(false);
   preview.classList.remove('hidden');
 }
 
@@ -876,18 +981,31 @@ function buildPrompt(vals) {
     .filter((c) => (vals[c.k] || '').trim())
     .map((c) => `- ${c.en}: ${vals[c.k].trim()}`);
 
-  const parti = [];
-  parti.push(ultimaTavola
-    ? 'The attached sheet shows the same character in several poses. Treat all panels as one single character, not as different people. Use it as the canonical character design.'
-    : 'Use the attached image as the canonical character design.');
-  parti.push("Redraw and refine it in a consistent style for a children's picture book and comic, keeping the same face structure, proportions and distinctive features.");
-  parti.push(`STYLE: ${words}. Plain light grey background, soft frontal lighting, flat colours, clean lineart.`);
+  const p = [];
+  p.push(ultimaTavola
+    ? 'The attached sheet shows the same person in several poses. Treat all panels as ONE single character, not as different people.'
+    : 'Use the attached image as the starting point for ONE character.');
+
+  p.push("Design that character for a children's picture book and comic, keeping the same face structure, proportions and distinctive features as the reference. Then produce, as separate images:");
+
+  p.push(`1) A CHARACTER TURNAROUND — the same character from several angles:
+   front view, three-quarter left, three-quarter right, profile, and back view.
+   Same outfit, same scale, same eye line across all views, neutral pose,
+   plain light grey background.
+
+2) AN EXPRESSION SHEET — the same character, front view, same scale:
+   neutral, smile, open-mouth laugh, surprise, anger, sadness.
+   Head and shoulders only.`);
+
+  p.push(`STYLE: ${words}. Flat colours, clean lineart, soft frontal lighting, plain light grey background, no scenery.`);
+
   if (righe.length) {
-    parti.push('CHARACTER BIBLE — reuse these exact tokens in every future prompt:\n' + righe.join('\n'));
+    p.push('CHARACTER BIBLE — reuse these exact tokens in every future prompt:\n' + righe.join('\n'));
   }
-  parti.push('This is the same character in every image. Keep the exact same face, hairstyle and distinctive features. Do not restyle the face.');
-  parti.push('NEGATIVE: no halftone, no Ben-Day dots, no paper grain, no newsprint texture, no vignette, no film grain, no posterization banding, no watermark, no text.');
-  return parti.join('\n\n');
+
+  p.push('Every panel must read as the exact same person: same face, same hairstyle, same distinctive features. Do not restyle the face between panels.');
+  p.push('NEGATIVE: no halftone, no Ben-Day dots, no paper grain, no newsprint texture, no vignette, no film grain, no posterization banding, no watermark, no text, no labels.');
+  return p.join('\n\n');
 }
 
 /* Istruzioni: restano a schermo, non vengono copiate. */
@@ -918,10 +1036,16 @@ DUE AVVERTENZE ONESTE
    ereditati e a volte amplificati. Per questo l\u2019interruttore "Pulito per
    l\u2019AI" spegne grana, retino e vignettatura.
 
+COSA CHIEDE IL PROMPT
+Due tavole: il TURNAROUND (fronte, tre quarti destro e sinistro, profilo,
+retro) e il FOGLIO DELLE ESPRESSIONI (neutra, sorriso, risata, sorpresa,
+rabbia, tristezza). Il turnaround da\u2019 al modello la struttura della testa
+invece di una sola proiezione; le espressioni fissano COME si deforma quel
+viso. Sono i due documenti che tengono il personaggio identico fra le tavole.
+
 POI, IL PASSAGGIO CHE FA LA DIFFERENZA
 Fatti generare UN SOLO personaggio e iteralo finche\u2019 non convince. Da quel
-momento il riferimento e\u2019 quel disegno approvato: e\u2019 cosi\u2019 che resta lo
-stesso per tutte le tavole del libro.
+momento il riferimento e\u2019 quel turnaround approvato, non piu\u2019 la foto.
 
 Se la persona ritratta non sei tu, chiedile il consenso prima di pubblicare un
 personaggio che le somiglia: una caricatura riconoscibile resta una somiglianza.`;
@@ -1062,7 +1186,7 @@ recBtn.addEventListener('click', () => {
   recorder.start(250);
   recStart = performance.now();
   recBtn.classList.add('active');
-  recBtn.textContent = '⏹';
+  etichettaRec('⏹', 'Stop');
   $('#recBadge').classList.remove('hidden');
   recTimer = setInterval(() => {
     const s = Math.floor((performance.now() - recStart) / 1000);
@@ -1071,13 +1195,41 @@ recBtn.addEventListener('click', () => {
   }, 250);
 });
 
+function etichettaRec(em, testo) {
+  const spans = recBtn.querySelectorAll('span');
+  if (spans[0]) spans[0].textContent = em;
+  if (spans[1]) spans[1].textContent = testo;
+}
+
 function stopRecording() {
   if (recorder && recorder.state !== 'inactive') recorder.stop();
   clearInterval(recTimer);
   recBtn.classList.remove('active');
-  recBtn.textContent = '⏺';
+  etichettaRec('⏺', 'Video');
   $('#recBadge').classList.add('hidden');
 }
+
+/* ---------------------------------------------------------
+   Pannello delle regolazioni
+
+   Si apre a meta' schermo e l'immagine si ritira sopra di esso:
+   intensita' e caricatura si regolano guardando il risultato, non a
+   memoria.
+   --------------------------------------------------------- */
+
+const sheet = $('#sheet'), backdrop = $('#backdrop');
+
+function apriSheet(apri) {
+  sheet.classList.toggle('open', apri);
+  backdrop.classList.toggle('open', apri);
+  stage.classList.toggle('sheet-open', apri);
+  // la geometria del canvas cambia: il riquadro va ridisegnato
+  setTimeout(drawOverlay, 280);
+}
+
+$('#btnSheet').addEventListener('click', () => apriSheet(!sheet.classList.contains('open')));
+$('#btnSheetClose').addEventListener('click', () => apriSheet(false));
+backdrop.addEventListener('click', () => apriSheet(false));
 
 /* ---- tocco sul video: mostra/nascondi i comandi ---- */
 let uiHidden = false;
