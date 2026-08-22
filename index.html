@@ -61,24 +61,21 @@
   </div>
 
   <div class="bottombar">
-    <div id="serieRow" class="serie-row hidden">
-      <span id="seriePros" class="serie-hint"></span>
-      <button id="btnAltraFoto" class="pill ghost">🖼️ Altre foto</button>
-      <button id="btnAltroScatto" class="pill ghost">📷 Scatta</button>
-      <button id="btnComponi" class="pill">Componi</button>
-      <button id="btnSvuota" class="pill ghost">Svuota</button>
+    <div class="slider-row">
+      <span class="slider-label">Intensità</span>
+      <input id="amount" type="range" min="0" max="100" value="70" aria-label="Intensità effetto">
     </div>
 
     <div id="effects" class="effects"></div>
 
     <div class="actions">
-      <button id="btnSerie" class="mini only-photo" title="Aggiungi alla serie">
-        <span class="mini-em">＋</span><span>Serie</span><span id="serieLabel">0/5</span>
-      </button>
-      <button id="btnRec" class="mini only-cam" title="Registra">
-        <span class="mini-em">⏺</span><span>Video</span>
-      </button>
-      <button id="btnShot" class="shutter" title="Esporta" aria-label="Esporta"></button>
+      <div class="slot-left">
+        <button id="btnRec" class="mini only-cam" title="Registra">
+          <span class="mini-em">⏺</span><span>Video</span>
+        </button>
+        <span id="poseBadge" class="pose-badge hidden"></span>
+      </div>
+      <button id="btnShot" class="shutter" title="Elabora" aria-label="Elabora"></button>
       <button id="btnSheet" class="mini" title="Regolazioni">
         <span class="mini-em">⚙</span><span>Regola</span>
       </button>
@@ -100,10 +97,6 @@
 
   <div class="sheet-body">
     <h3 class="sez">Resa</h3>
-    <div class="range">
-      <label for="amount">Intensità dell'effetto</label>
-      <input id="amount" type="range" min="0" max="100" value="70">
-    </div>
     <div class="row">
       <span class="lab">Pulito per l'AI
         <span class="hint">Spegne grana, retino e vignettatura: sono texture che un modello copia come materia del personaggio.</span>
@@ -157,15 +150,34 @@
       <button id="btnPair" class="switch" type="button" aria-pressed="false" aria-label="Aggiungi anche il ritratto"></button>
     </div>
 
+    <div class="row hidden" id="rowSerie">
+      <span class="lab">Serie in corso
+        <span class="hint" id="serieStato"></span>
+      </span>
+      <button id="btnAzzeraSerie" class="pill ghost">Azzera</button>
+    </div>
+
     <button id="btnFull" class="ghost-btn wide small-btn">Schermo intero</button>
   </div>
 </section>
 
 <!-- ============ Risultati ============ -->
 <section id="preview" class="screen hidden">
-  <h2 class="results-title">Pronte da dare all'AI</h2>
+  <h2 class="results-title" id="resultsTitle">Pronta</h2>
   <div id="results" class="results"></div>
-  <div class="preview-actions">
+
+  <!-- dopo ogni elaborazione l'app chiede se continuare -->
+  <div id="askMore" class="ask-more hidden">
+    <p id="poseInfo" class="ask-text"></p>
+    <div class="ask-buttons">
+      <button id="btnPosaCoda" class="big-btn compact hidden">Continua</button>
+      <button id="btnPosaGalleria" class="ghost-btn">🖼️ Un'altra foto</button>
+      <button id="btnPosaScatto" class="ghost-btn">📷 Scatta</button>
+      <button id="btnFinito" class="big-btn compact">Ho finito</button>
+    </div>
+  </div>
+
+  <div class="preview-actions hidden" id="finalActions">
     <button id="btnClose" class="ghost-btn">Chiudi</button>
     <button id="btnText" class="big-btn compact">Testo per l'AI</button>
   </div>

@@ -770,99 +770,101 @@ async function shoot() {
   flash.classList.add('on');
   requestAnimationFrame(() => flash.classList.remove('on'));
 
-  const set = impostazioni();
+  // dalla seconda posa in poi si riusano le impostazioni della prima
+  const set = poseSet || impostazioni();
   showToast('Elaboro a piena risoluzione…', 2500);
   const src = await sorgentePronta(set);
   if (!src) return;
 
   const list = (mode === 'foto' && pairOn)
-    ? ['ritratto', effect === 'ritratto' ? lastStyle : effect]
-    : [effect];
+    ? ['ritratto', set.effect === 'ritratto' ? lastStyle : set.effect]
+    : [set.effect];
 
   const out = [];
   for (const id of list) {
     const r = await exportOne(id, src.fitted, src.fitted.width, src.fitted.height,
-                             src.flip, src.volto, src.maschera, set);
+                              src.flip, src.volto, src.maschera, set);
     if (r) out.push(r);
   }
   src.fitted.width = src.fitted.height = 0;
-  if (!out.length) return showToast('Esportazione non riuscita: prova una risoluzione più bassa', 4000);
+  if (!out.length) return showToast('Elaborazione non riuscita: prova una risoluzione più bassa', 4000);
+
+  /* La versione stilizzata diventa una posa: la serie si costruisce
+     scattando, non con un comando a parte. */
+  const stile = out.find((r) => r.kind !== 'identita') || out[0];
+  poseSet = set;
+  pose.push({ blob: stile.blob, posa: POSE_NOMI[Math.min(pose.length, POSE_NOMI.length - 1)],
+              size: stile.size, w: stile.w, h: stile.h });
+  syncSerie();
   ultimaTavola = false;
-  showResults(out);
+
+  if (pose.length >= POSE_MAX) {
+    showToast('Cinque pose: compongo la tavola', 3000);
+    return componiSerie();
+  }
+  showResults(out, true);
 }
 
 /* ---------------------------------------------------------
-   Serie: fino a cinque scatti in una sola tavola
+   Serie di pose
 
-   Un personaggio regge le tavole successive se il modello ne vede la
-   struttura da piu' angoli, non una sola proiezione. Le pose vengono
-   rese TUTTE con le impostazioni del primo scatto: se cambiassero
-   effetto o intensita' da un pannello all'altro, il modello leggerebbe
-   le differenze di stile come differenze del personaggio.
+   Non c'e' un comando "serie" da capire prima di usarlo: si elabora una
+   foto e l'app chiede se aggiungerne un'altra. Con piu' pose il modello
+   vede la struttura della testa invece di una sola proiezione.
+
+   Tutte le pose vengono rese con le impostazioni della prima: se
+   cambiassero effetto o intensita' da un pannello all'altro, il modello
+   leggerebbe le differenze di stile come differenze del personaggio.
    --------------------------------------------------------- */
 
-const SERIE_MAX = 5;
-const SERIE_POSE = ['di fronte, sguardo in camera', 'tre quarti verso destra',
-                    'tre quarti verso sinistra', 'di profilo', 'espressione diversa (sorriso)'];
-let serie = [];
-let serieSet = null;
+const POSE_MAX = 5;
+const POSE_NOMI = ['di fronte, sguardo in camera', 'tre quarti verso destra',
+                   'tre quarti verso sinistra', 'di profilo', 'un\u2019espressione diversa'];
+let pose = [];
+let poseSet = null;
 let ultimaTavola = false;
 
 function syncSerie() {
-  $('#serieLabel').textContent = `${serie.length}/${SERIE_MAX}`;
-  $('#btnSerie').setAttribute('aria-pressed', String(serie.length > 0));
-  $('#serieRow').classList.toggle('hidden', serie.length === 0 && coda.length === 0);
-  $('#btnComponi').classList.toggle('hidden', serie.length === 0);
-  $('#btnSvuota').classList.toggle('hidden', serie.length === 0 && coda.length === 0);
-  const inAttesa = coda.length ? ` · ${coda.length} in attesa` : '';
-  $('#seriePros').textContent = serie.length < SERIE_MAX
-    ? `Prossima: ${SERIE_POSE[serie.length]}${inAttesa}`
-    : `Serie completa${inAttesa}`;
+  const n = pose.length;
+  const badge = $('#poseBadge');
+  badge.textContent = n ? `${n}/${POSE_MAX} pose` : '';
+  badge.classList.toggle('hidden', n === 0);
+  $('#rowSerie').classList.toggle('hidden', n === 0);
+  $('#serieStato').textContent = n
+    ? `${n} pose pronte. Le prossime usano le impostazioni della prima.`
+    : '';
   requestAnimationFrame(misuraBarra);
 }
 
-$('#btnSerie').addEventListener('click', async () => {
-  if (mode !== 'foto') return showToast('La serie si compone partendo dalle foto', 3200);
-  if (serie.length >= SERIE_MAX) return showToast('Cinque pose sono il massimo', 3000);
-
-  const set = serieSet || impostazioni();
-  if (serieSet) showToast('Uso le impostazioni del primo scatto, per coerenza', 2600);
-  else showToast('Elaboro il primo pannello…', 2200);
-
-  const src = await sorgentePronta(set);
-  if (!src) return;
-  const r = await exportOne(set.effect, src.fitted, src.fitted.width, src.fitted.height,
-                            src.flip, src.volto, src.maschera, set);
-  src.fitted.width = src.fitted.height = 0;
-  if (!r) return showToast('Non riesco a preparare questo pannello', 3200);
-
-  serieSet = set;
-  serie.push({ blob: r.blob, posa: SERIE_POSE[serie.length], size: r.size, w: r.w, h: r.h });
+function azzeraSerie() {
+  pose = []; poseSet = null; coda = [];
   syncSerie();
+}
 
-  if (await prossimaDallaCoda()) {
-    showToast(`Pannello ${serie.length} aggiunto. Ecco la foto successiva`, 3400);
-  } else if (serie.length === 1 && !set.useMask) {
-    showToast('Pannello 1 aggiunto. Per una tavola coerente conviene il fondo neutro', 4600);
-  } else if (serie.length < SERIE_MAX) {
-    showToast(`Pannello ${serie.length} aggiunto. Aggiungi altre foto o scatta`, 3800);
-  } else {
-    showToast('Cinque pose: puoi comporre la tavola', 3400);
-  }
+$('#btnAzzeraSerie').addEventListener('click', () => {
+  azzeraSerie();
+  apriSheet(false);
+  showToast('Serie azzerata', 2000);
 });
 
-$('#btnSvuota').addEventListener('click', () => {
-  serie = []; serieSet = null; coda = []; syncSerie();
-  showToast('Serie svuotata', 2000);
+$('#btnPosaCoda').addEventListener('click', async () => {
+  preview.classList.add('hidden');
+  await prossimaDallaCoda();
 });
+$('#btnPosaGalleria').addEventListener('click', () => { preview.classList.add('hidden'); filePick.click(); });
+$('#btnPosaScatto').addEventListener('click', () => { preview.classList.add('hidden'); fileShot.click(); });
 
-$('#btnAltraFoto').addEventListener('click', () => filePick.click());
-$('#btnAltroScatto').addEventListener('click', () => fileShot.click());
-
-$('#btnComponi').addEventListener('click', () => componiSerie());
+$('#btnFinito').addEventListener('click', () => {
+  if (pose.length > 1) return componiSerie();
+  // una sola posa: quello che si vede e' gia' il risultato
+  azzeraSerie();
+  $('#askMore').classList.add('hidden');
+  $('#finalActions').classList.remove('hidden');
+  $('#resultsTitle').textContent = 'Pronta da dare all\u2019AI';
+});
 
 async function componiSerie() {
-  const n = serie.length;
+  const n = pose.length;
   if (!n) return;
   showToast('Compongo la tavola…', 2600);
 
@@ -872,7 +874,7 @@ async function componiSerie() {
 
   // i ritagli hanno forme libere: la cella prende la forma media, e i
   // pannelli che non la riempiono restano centrati sul fondo
-  const forme = serie.map((sp) => (sp.w && sp.h) ? sp.w / sp.h : CROP_RATIO);
+  const forme = pose.map((sp) => (sp.w && sp.h) ? sp.w / sp.h : CROP_RATIO);
   const forma = Math.max(0.4, Math.min(2.2, forme.reduce((a, b) => a + b, 0) / forme.length));
 
   let cw = Math.floor((LIM - g * (cols + 1)) / cols);
@@ -889,13 +891,12 @@ async function componiSerie() {
   const ctx = cv.getContext('2d');
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
-  // stesso grigio del fondo neutro: la tavola si legge come un foglio unico
-  ctx.fillStyle = '#e0e0e6';
+  ctx.fillStyle = '#e0e0e6';       // lo stesso grigio del fondo neutro
   ctx.fillRect(0, 0, W, H);
 
   for (let i = 0; i < n; i++) {
     let bmp;
-    try { bmp = await createImageBitmap(serie[i].blob); } catch (e) { continue; }
+    try { bmp = await createImageBitmap(pose[i].blob); } catch (e) { continue; }
     const x = g + (i % cols) * (cw + g), y = g + Math.floor(i / cols) * (ch + g);
     const k = Math.min(cw / bmp.width, ch / bmp.height);
     const dw = Math.round(bmp.width * k), dh = Math.round(bmp.height * k);
@@ -908,24 +909,26 @@ async function componiSerie() {
   cv.width = cv.height = 0;
   if (!blob) return showToast('Composizione non riuscita', 3200);
 
-  // La tavola unica serve a chi accetta una sola immagine (Midjourney);
-  // i pannelli separati a chi ne accetta piu' di una (Gemini).
+  /* Due deliverable: la tavola unica per i modelli che accettano un solo
+     riferimento, i pannelli separati per quelli che ne accettano piu' di
+     uno. Prepararne uno solo taglierebbe fuori meta' dei modelli. */
   const cards = [{
     blob, size: dim, kind: 'tavola', label: `Tavola — ${n} pose`,
     note: 'Una sola immagine con tutte le pose: per i modelli che accettano un solo riferimento.',
     tipo: blob.type, peso: Math.round(blob.size / 1024),
     name: `personaggio-tavola-${n}pose.png`,
   }];
-  serie.forEach((sp, i) => cards.push({
+  pose.forEach((sp, i) => cards.push({
     blob: sp.blob, size: sp.size || '', kind: 'posa', label: `Posa ${i + 1}`,
     note: sp.posa + ' — utile per i modelli che accettano più riferimenti.',
     tipo: sp.blob.type, peso: Math.round(sp.blob.size / 1024),
     name: `personaggio-posa-${i + 1}.png`,
   }));
+
   ultimaTavola = true;
-  showResults(cards);
+  azzeraSerie();
+  showResults(cards, false);
 }
-syncSerie();
 
 $('#btnShot').addEventListener('click', () => { shoot(); });
 
@@ -945,7 +948,7 @@ async function cameraStill() {
    Risultati
    --------------------------------------------------------- */
 
-function showResults(list) {
+function showResults(list, chiedi) {
   results.forEach((r) => { if (r.url) URL.revokeObjectURL(r.url); });
   results = list.map((r) => Object.assign({}, r, { url: URL.createObjectURL(r.blob) }));
 
@@ -955,7 +958,7 @@ function showResults(list) {
     const card = document.createElement('figure');
     card.className = 'result-card';
     card.innerHTML = `
-      <div class="badge ${r.kind === 'identita' ? 'badge-id' : ''}">${r.label}</div>
+      <div class="badge ${r.kind === 'tavola' ? 'badge-id' : ''}">${r.label}</div>
       <img src="${r.url}" alt="${r.label}">
       <figcaption>${r.note}<br><span class="meta">${r.size ? r.size + ' · ' : ''}${r.tipo.indexOf('png') >= 0 ? 'PNG' : 'JPEG'} · ${r.peso} KB</span></figcaption>
       <button class="ghost-btn small" data-i="${i}">Salva / Condividi</button>`;
@@ -963,9 +966,36 @@ function showResults(list) {
     box.appendChild(card);
   });
 
-  $('#saveHint').textContent = results.length > 1
-    ? 'La foto reale resta un’opzione tua: per l’AI basta il disegno più il testo.'
-    : 'Su iPhone puoi anche tenere premuto sull’immagine per salvarla in Foto.';
+  /* Dopo ogni elaborazione l'app chiede se continuare: e' il modo in cui
+     la serie si costruisce, senza un comando da imparare prima. */
+  $('#askMore').classList.toggle('hidden', !chiedi);
+  $('#finalActions').classList.toggle('hidden', !!chiedi);
+  // schede compatte mentre l'app chiede, altrimenti la domanda e i suoi
+  // pulsanti finiscono sotto la piega
+  preview.classList.toggle('chiedi', !!chiedi);
+
+  if (chiedi) {
+    const n = pose.length;
+    $('#resultsTitle').textContent = n > 1 ? `Posa ${n} pronta` : 'Pronta';
+    const prossima = POSE_NOMI[n] || '';
+    $('#poseInfo').textContent = coda.length
+      ? `Hai altre ${coda.length} foto in attesa: continuo con la prossima?`
+      : (n > 1
+        ? `Ne aggiungiamo un'altra? La prossima utile è ${prossima}.`
+        : `Vuoi aggiungere altre pose dello stesso personaggio? Con più angolazioni l'AI vede la forma della testa invece di una sola proiezione. La prossima utile è ${prossima}.`);
+    $('#btnPosaCoda').classList.toggle('hidden', coda.length === 0);
+    $('#btnPosaCoda').textContent = `Continua (${coda.length} in attesa)`;
+    $('#btnPosaGalleria').classList.toggle('hidden', coda.length > 0);
+    $('#btnPosaScatto').classList.toggle('hidden', coda.length > 0);
+    $('#btnFinito').textContent = n > 1 ? `Ho finito: componi le ${n} pose` : 'Ho finito, basta questa';
+    $('#saveHint').textContent = 'Puoi salvarla comunque adesso: la serie continua a parte.';
+  } else {
+    $('#resultsTitle').textContent = results.length > 1 ? 'Pronte da dare all\u2019AI' : 'Pronta da dare all\u2019AI';
+    $('#saveHint').textContent = results.length > 1
+      ? 'Dai la tavola ai modelli che accettano una sola immagine, i pannelli a quelli che ne accettano più di una.'
+      : 'Su iPhone puoi anche tenere premuto sull\u2019immagine per salvarla in Foto.';
+  }
+
   apriSheet(false);
   preview.classList.remove('hidden');
 }
@@ -1296,7 +1326,7 @@ recBtn.addEventListener('click', () => {
       note: 'Anteprima animata dell’effetto.', tipo: blob.type,
       peso: Math.round(blob.size / 1024),
       name: `cartooncam-${Date.now()}.${blob.type.indexOf('mp4') >= 0 ? 'mp4' : 'webm'}`,
-    }]);
+    }], false);
   };
   recorder.start(250);
   recStart = performance.now();
@@ -1361,6 +1391,8 @@ function showToast(text, ms) {
   clearTimeout(showToast._t);
   showToast._t = setTimeout(() => t.classList.remove('show'), ms);
 }
+
+syncSerie();
 
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {

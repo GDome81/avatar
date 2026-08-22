@@ -310,3 +310,29 @@ input[type=range]::-moz-range-thumb{width:24px; height:24px; border:0; border-ra
   background:#14141f; border:1px solid var(--line); border-radius:12px; color:var(--text);
   padding:11px 13px; font-size:14px; font-family:inherit; width:100%;
 }
+
+/* ---------- domanda dopo l'elaborazione ---------- */
+.ask-more{
+  width:100%; max-width:460px; display:flex; flex-direction:column; gap:12px;
+  background:#14141f; border:1px solid var(--line); border-radius:18px; padding:16px;
+}
+.ask-text{margin:0; font-size:14px; line-height:1.5; color:#dedeea; text-align:left}
+.ask-buttons{display:flex; flex-direction:column; gap:9px}
+.ask-buttons .ghost-btn, .ask-buttons .big-btn{width:100%; max-width:none; padding:13px 18px; font-size:15px}
+.ask-buttons .hidden{display:none}
+
+/* indicatore delle pose accanto allo scatto */
+.slot-left{display:flex; align-items:center; gap:8px; justify-self:start; min-width:0}
+.pose-badge{
+  font-size:11.5px; font-weight:800; letter-spacing:.3px; color:#12141b;
+  background:var(--mint); padding:6px 11px; border-radius:999px; white-space:nowrap;
+}
+.slider-row{display:flex; align-items:center; gap:12px; padding:0 18px}
+.slider-label{font-size:12px; font-weight:600; color:#e2e2ee; min-width:60px; text-shadow:0 1px 3px #000}
+
+/* mentre l'app chiede, la scheda si fa compatta: la domanda e i suoi
+   pulsanti devono stare nella prima schermata */
+#preview.chiedi .result-card img{max-height:24vh}
+#preview.chiedi .result-card{gap:6px; padding:10px}
+#preview.chiedi .result-card figcaption{font-size:11.5px}
+#preview.chiedi .results-title{font-size:17px}

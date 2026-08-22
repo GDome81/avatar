@@ -74,8 +74,9 @@ In modo foto:
 
 - **🎯 Ritaglio** — trascina il riquadro, pizzica per ridimensionarlo. Le guide tratteggiate indicano dove mettere la testa e la linea degli occhi
 - **Uscita** — 1024 / 1536 / 2048 px, oppure piena. Il default 1536 è voluto: oltre i 2048 px l'identità non migliora, perché i modelli ricampionano su griglie fisse. Si guadagna **ritagliando**, non ingrandendo
-Sopra l'immagine stanno solo gli effetti e lo scatto. Tutto il resto — intensità,
-fondo neutro, caricatura, ritaglio, risoluzione — vive nel pannello **⚙ Regola**,
+Sopra l'immagine stanno l'**intensità dell'effetto**, gli effetti e lo scatto —
+cioè le tre cose che si toccano continuamente. Tutto il resto — fondo neutro,
+caricatura, ritaglio, risoluzione — vive nel pannello **⚙ Regola**,
 che si apre a metà schermo lasciando l'immagine visibile sopra di sé, così le
 regolazioni si fanno guardando il risultato.
 
@@ -90,28 +91,30 @@ regolazioni si fanno guardando il risultato.
 - **Caricatura** — occhi più grandi, cranio più alto, mandibola più stretta
 - **＋ Serie** — fino a cinque pose in una sola tavola
 
-## La serie: fino a cinque pose
+## Più pose dello stesso personaggio
 
-Un personaggio regge le tavole successive se il modello ne vede la struttura da
-più angoli, non una sola proiezione. Quindi:
+Non c'è un comando "serie" da capire prima di poterlo usare: si elabora una foto
+e **l'app chiede** se aggiungerne un'altra.
 
-1. scegli **più foto in una volta** (o scattane una), inquadra e tocca **＋ Serie**
-2. la foto successiva della coda si carica da sola; l'app suggerisce la posa
-   (di fronte, tre quarti destro, tre quarti sinistro, di profilo, sorriso).
-   Con *Altre foto* e *Scatta* puoi aggiungerne quando vuoi
-3. tocca **Componi**
-
-Fra scatti della stessa fotocamera il ritaglio si conserva: quando le foto hanno
-la stessa misura non si riparte da zero ogni volta.
+1. inquadra, tocca lo scatto
+2. compare il risultato e la domanda: *Un'altra foto* / *Scatta* / *Ho finito*
+3. ogni volta l'app dice quale posa conviene fare adesso (di fronte, tre quarti
+   destro, tre quarti sinistro, di profilo, un'espressione diversa)
+4. a *Ho finito* — o alla quinta posa — compone la tavola da sé
 
 Escono **due cose**: la tavola unica, per i modelli che accettano un solo
 riferimento (Midjourney), e i **pannelli separati**, per quelli che ne accettano
 più di uno (Gemini ne prende fino a cinque per la coerenza del personaggio).
 Prepararne solo uno dei due taglierebbe fuori metà dei modelli.
 
-Tutti i pannelli vengono resi con le **impostazioni del primo scatto**, anche se
-poi cambi effetto: differenze di stile fra un pannello e l'altro verrebbero lette
-come differenze del personaggio.
+Tutte le pose vengono rese con le **impostazioni della prima**, anche se poi
+cambi effetto: differenze di stile fra un pannello e l'altro verrebbero lette
+come differenze del personaggio. Un indicatore accanto allo scatto ricorda a che
+punto sei, e nel pannello delle regolazioni c'è *Azzera* per ricominciare.
+
+Se selezioni **più foto in una volta** finiscono in coda e la domanda diventa
+*Continua (n in attesa)*. Fra scatti della stessa fotocamera il ritaglio si
+conserva: se fai tre pose con lo stesso telefono, inquadri una volta.
 
 ## Il testo per l'AI
 
