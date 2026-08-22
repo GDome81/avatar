@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0b0b12">
+<meta name="description" content="Vediti in stile cartoon, anime o disegno a matita usando la fotocamera del telefono. Funziona nel browser, niente app da installare.">
+<title>Cartoon Cam</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ============ Schermata iniziale ============ -->
+<section id="intro" class="screen">
+  <div class="intro-card">
+    <div class="logo">🎨</div>
+    <h1>Cartoon Cam</h1>
+    <p class="tagline">Guardati in stile <b>cartoon</b>, <b>anime</b> o <b>disegno a matita</b>. Tutto dal telefono, in tempo reale.</p>
+    <button id="btnStart" class="big-btn">Attiva la fotocamera</button>
+    <p class="fineprint">Il video non lascia mai il tuo telefono: l'elaborazione avviene dentro il browser.</p>
+  </div>
+</section>
+
+<!-- ============ Errori ============ -->
+<section id="error" class="screen hidden">
+  <div class="intro-card">
+    <div class="logo">😕</div>
+    <h1>Fotocamera non disponibile</h1>
+    <p id="errorMsg" class="tagline"></p>
+    <button id="btnRetry" class="big-btn">Riprova</button>
+  </div>
+</section>
+
+<!-- ============ Camera ============ -->
+<main id="stage" class="hidden">
+  <video id="video" playsinline autoplay muted></video>
+  <canvas id="canvas"></canvas>
+
+  <div id="flash"></div>
+
+  <!-- barra superiore -->
+  <div class="topbar">
+    <button id="btnFlip" class="icon-btn" title="Cambia fotocamera" aria-label="Cambia fotocamera">🔄</button>
+    <div id="effectName" class="effect-name">Cartoon</div>
+    <button id="btnFull" class="icon-btn" title="Schermo intero" aria-label="Schermo intero">⛶</button>
+  </div>
+
+  <!-- controlli inferiori -->
+  <div class="bottombar">
+    <div class="slider-row">
+      <span class="slider-label">Intensità</span>
+      <input id="amount" type="range" min="0" max="100" value="70" aria-label="Intensità effetto">
+    </div>
+
+    <div id="effects" class="effects"></div>
+
+    <div class="shutter-row">
+      <button id="btnRec" class="round-btn" title="Registra video" aria-label="Registra video">⏺</button>
+      <button id="btnShot" class="shutter" title="Scatta foto" aria-label="Scatta foto"></button>
+      <button id="btnFreeze" class="round-btn" title="Congela immagine" aria-label="Congela immagine">⏸</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <div id="recBadge" class="rec-badge hidden"><span class="dot"></span><span id="recTime">0:00</span></div>
+</main>
+
+<!-- ============ Anteprima scatto ============ -->
+<section id="preview" class="screen hidden">
+  <div class="preview-wrap">
+    <img id="previewImg" alt="Anteprima dello scatto">
+    <video id="previewVid" class="hidden" controls playsinline></video>
+  </div>
+  <div class="preview-actions">
+    <button id="btnClose" class="ghost-btn">Chiudi</button>
+    <button id="btnSave" class="big-btn compact">Salva / Condividi</button>
+  </div>
+  <p id="saveHint" class="fineprint center">Su iPhone: tieni premuto sull'immagine e scegli “Aggiungi a Foto”.</p>
+</section>
+
+<script src="app.js"></script>
+</body>
+</html>

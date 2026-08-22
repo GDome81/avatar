@@ -1,0 +1,15 @@
+{
+  "name": "Cartoon Cam",
+  "short_name": "Cartoon Cam",
+  "description": "Guardati in stile cartoon, anime o disegno usando la fotocamera del telefono.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b0b12",
+  "theme_color": "#0b0b12",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
