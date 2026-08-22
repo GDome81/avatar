@@ -992,15 +992,38 @@ $('#btnClose').addEventListener('click', () => preview.classList.add('hidden'));
    Testo per l'AI
    --------------------------------------------------------- */
 
-const STYLE_WORDS = {
-  inchiostro: 'comic book character design, clean black ink lineart, flat colours, three-tone cel shading',
-  cartoon:    'flat colour cartoon illustration, bold clean outlines, simple shapes, cel shading',
-  anime:      'modern anime illustration, cel shading, clean lineart, soft rim light, expressive eyes',
-  matita:     'graphite pencil drawing, visible hatching, warm white paper, monochrome',
-  fumetto:    'classic comic book art, bold black inks, flat spot colours',
-  acquerello: "children's picture book watercolour illustration, soft washes",
-  neon:       'neon outline illustration on a dark background',
-  ritratto:   'flat colour illustration, clean lineart',
+/* Stili richiedibili all'AI. Sono indipendenti dall'effetto con cui
+   l'immagine e' stata resa: si puo' mandare un disegno a inchiostro e
+   chiedere un acquerello. Il campo "bn" dice se lo stile nasce in
+   bianco e nero, per proporre il colore giusto per default. */
+const STILI = [
+  { k: 'manga',      label: 'Manga (giapponese)',
+    en: 'black and white manga illustration, clean ink lineart, screentone shading, expressive eyes',
+    bn: true, texture: true },
+  { k: 'anime',      label: 'Anime (giapponese a colori)',
+    en: 'modern anime illustration, cel shading, clean lineart, soft rim light, expressive eyes' },
+  { k: 'comic',      label: 'Fumetto americano',
+    en: 'American comic book art, bold black inks, dynamic linework, flat spot colours',
+    texture: true },
+  { k: 'bd',         label: 'Fumetto europeo (bande dessinée)',
+    en: 'European bande dessinée style, fine clean lineart, flat colours, Franco-Belgian comic tradition' },
+  { k: 'libro',      label: 'Libro illustrato per bambini',
+    en: "children's picture book illustration, soft rounded shapes, warm palette, gentle watercolour washes" },
+  { k: 'cartoon',    label: 'Cartoon moderno (TV)',
+    en: 'modern TV cartoon character design, simple bold shapes, thick clean outlines, flat colours' },
+  { k: 'dipinto',    label: 'Semi-realistico dipinto',
+    en: 'semi-realistic painted illustration, soft brushwork, slightly stylised proportions' },
+  { k: 'realistico', label: 'Realistico',
+    en: 'realistic portrait illustration, accurate anatomy and proportions, subtle painterly rendering' },
+  { k: 'matita',     label: 'Matita',
+    en: 'graphite pencil drawing, hatching and cross-hatching for shading',
+    bn: true, texture: true },
+];
+
+/* Da quale effetto si arriva, quale stile proporre. */
+const STILE_DA_EFFETTO = {
+  inchiostro: 'comic', fumetto: 'comic', cartoon: 'cartoon', anime: 'anime',
+  matita: 'matita', acquerello: 'libro', neon: 'cartoon', ritratto: 'dipinto',
 };
 
 /* Campi della "bibbia del personaggio". Sono tutti facoltativi: quelli
@@ -1025,8 +1048,8 @@ function salvaValori(v) { store.set('bibbia', JSON.stringify(v)); }
 
 /* Solo il prompt: e' questo che finisce negli appunti. */
 function buildPrompt(vals) {
-  const styleId = effect === 'ritratto' ? lastStyle : effect;
-  const words = STYLE_WORDS[styleId] || STYLE_WORDS.inchiostro;
+  const stile = STILI.find((x) => x.k === $('#stileSel').value) || STILI[2];
+  const bn = $('#coloreSel').value === 'bn';
   const righe = CAMPI
     .filter((c) => (vals[c.k] || '').trim())
     .map((c) => `- ${c.en}: ${vals[c.k].trim()}`);
@@ -1047,14 +1070,28 @@ function buildPrompt(vals) {
    neutral, smile, open-mouth laugh, surprise, anger, sadness.
    Head and shoulders only.`);
 
-  p.push(`STYLE: ${words}. Flat colours, clean lineart, soft frontal lighting, plain light grey background, no scenery.`);
+  p.push(`STYLE: ${stile.en}.`);
+  p.push(bn
+    ? 'COLOUR: black and white only, monochrome. Build the values with line weight and shading, not with colour.'
+    : 'COLOUR: full colour, consistent palette across every panel.');
+  p.push('Plain light grey background, soft frontal lighting, no scenery.');
 
   if (righe.length) {
     p.push('CHARACTER BIBLE — reuse these exact tokens in every future prompt:\n' + righe.join('\n'));
   }
 
   p.push('Every panel must read as the exact same person: same face, same hairstyle, same distinctive features. Do not restyle the face between panels.');
-  p.push('NEGATIVE: no halftone, no Ben-Day dots, no paper grain, no newsprint texture, no vignette, no film grain, no posterization banding, no watermark, no text, no labels.');
+
+  /* La lista dei negativi si adatta allo stile: vietare il retino a uno
+     stile manga o a un fumetto inchiostrato sarebbe una contraddizione,
+     li' quella texture e' voluta. */
+  const negativi = ['no watermark', 'no text', 'no labels', 'no photographic background',
+                    'no film grain', 'no vignette', 'no JPEG artefacts'];
+  if (!stile.texture) {
+    negativi.push('no halftone', 'no Ben-Day dots', 'no paper grain', 'no newsprint texture');
+  }
+  if (!bn) negativi.push('no posterization banding');
+  p.push('NEGATIVE: ' + negativi.join(', ') + '.');
   return p.join('\n\n');
 }
 
@@ -1104,6 +1141,34 @@ personaggio che le somiglia: una caricatura riconoscibile resta una somiglianza.
 /* ---- pannello: campi, anteprima del prompt, copia ---- */
 
 function apriTesto() {
+  const sel = $('#stileSel');
+  if (!sel.options.length) {
+    STILI.forEach((x) => {
+      const o = document.createElement('option');
+      o.value = x.k; o.textContent = x.label;
+      sel.appendChild(o);
+    });
+    sel.addEventListener('change', () => {
+      store.set('stile', sel.value);
+      const st = STILI.find((x) => x.k === sel.value);
+      // proponi il colore che lo stile si aspetta, senza imporlo
+      if (st && !store.get('coloreScelto', '')) {
+        $('#coloreSel').value = st.bn ? 'bn' : 'colori';
+      }
+      aggiornaPrompt();
+    });
+    $('#coloreSel').addEventListener('change', () => {
+      store.set('colore', $('#coloreSel').value);
+      store.set('coloreScelto', '1');     // da qui in poi decide l'utente
+      aggiornaPrompt();
+    });
+  }
+  const suggerito = STILE_DA_EFFETTO[effect === 'ritratto' ? lastStyle : effect] || 'comic';
+  sel.value = store.get('stile', suggerito);
+  if (!STILI.some((x) => x.k === sel.value)) sel.value = suggerito;
+  const st = STILI.find((x) => x.k === sel.value);
+  $('#coloreSel').value = store.get('colore', st && st.bn ? 'bn' : 'colori');
+
   const vals = leggiValori();
   const box = $('#campi');
   box.innerHTML = '';

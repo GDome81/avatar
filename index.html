@@ -176,7 +176,24 @@
 <section id="textPanel" class="screen hidden">
   <h2 class="results-title">Testo per l'AI</h2>
   <div class="text-scroll">
-    <p class="fineprint">Compila quello che vuoi: i campi vuoti vengono <b>tolti</b> dal prompt.</p>
+    <h3 class="mini-title">Stile da chiedere all'AI</h3>
+    <div class="campi">
+      <label class="campo">
+        <span>Stile del disegno</span>
+        <select id="stileSel"></select>
+      </label>
+      <label class="campo">
+        <span>Colore</span>
+        <select id="coloreSel">
+          <option value="colori">A colori</option>
+          <option value="bn">Bianco e nero</option>
+        </select>
+      </label>
+    </div>
+    <p class="fineprint">Lo stile del prompt è indipendente dall'effetto con cui hai reso l'immagine:
+    puoi mandare un disegno a inchiostro e chiedere un acquerello.</p>
+
+    <h3 class="mini-title">Com'è fatto il personaggio <span class="mini-note">— tutto facoltativo</span></h3>
     <div id="campi" class="campi"></div>
     <details id="guida" class="guida">
       <summary>Come caricarla, e due avvertenze</summary>

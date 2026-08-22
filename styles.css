@@ -304,3 +304,9 @@ input[type=range]::-moz-range-thumb{width:24px; height:24px; border:0; border-ra
 .sheet{max-height:62vh}
 #stage.sheet-open.photo-mode #viewport{bottom:63vh}
 .toast{z-index:26}
+
+/* i menù nel pannello del testo seguono lo stile dei campi */
+.campo select{
+  background:#14141f; border:1px solid var(--line); border-radius:12px; color:var(--text);
+  padding:11px 13px; font-size:14px; font-family:inherit; width:100%;
+}

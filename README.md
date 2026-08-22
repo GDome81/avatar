@@ -115,6 +115,17 @@ come differenze del personaggio.
 
 ## Il testo per l'AI
 
+Nel pannello si scelgono **stile** e **colore** con due menù, indipendenti
+dall'effetto con cui hai reso l'immagine: puoi mandare un disegno a inchiostro e
+chiedere un acquerello. Gli stili sono nove — manga, anime, fumetto americano,
+fumetto europeo, libro illustrato, cartoon TV, semi-realistico dipinto,
+realistico, matita — e ognuno propone il colore che si aspetta (il manga parte in
+bianco e nero) senza imporlo.
+
+La lista dei **negativi si adatta allo stile**: vietare il retino a un manga o a
+un fumetto inchiostrato sarebbe una contraddizione, lì quella texture è voluta.
+Viene escluso solo dove non c'entra.
+
 Il prompt non chiede una sola immagine: chiede al modello di produrre **due
 tavole** — il *turnaround* (fronte, tre quarti destro e sinistro, profilo, retro)
 e il *foglio delle espressioni* (neutra, sorriso, risata, sorpresa, rabbia,
